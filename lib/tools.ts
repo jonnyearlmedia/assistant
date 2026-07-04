@@ -83,6 +83,21 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "create_automation",
+    description:
+      "Set up a recurring automation lexa runs on a schedule and texts jonny the result — e.g. 'every morning summarize my unread email', 'every friday review my week', 'each night ask how my day went'. She runs it with full tools (can read email, create tasks, etc.). hour is 0-23 in his timezone; weekday optional (0=sun..6=sat, omit = daily).",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        instruction: { type: "string", description: "what to do when it fires, in your words" },
+        hour: { type: "number" },
+        weekday: { type: "number" },
+      },
+      required: ["name", "instruction", "hour"],
+    },
+  },
+  {
     name: "route_todo",
     description:
       "Decide where a to-do belongs: ticktick (schedulable/recording), master_planner (planner/project), or short_term (lightweight). Returns the routing decision; then call the matching create tool.",
@@ -186,6 +201,13 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(await mem.scheduleReminder(u, input));
       case "list_reminders":
         return JSON.stringify(await mem.listReminders(u));
+      case "create_automation":
+        return JSON.stringify(
+          await mem.savePlaybook(u, input.name, input.instruction, {
+            trigger: `automation @ ${input.hour}:00 ${input.weekday != null ? `wd${input.weekday}` : "daily"}`,
+            format: { automation: true, hour: input.hour, weekday: input.weekday ?? null, last_run: null },
+          })
+        );
       case "route_todo": {
         // lightweight heuristic; refined by learned routing playbooks over time
         return JSON.stringify({

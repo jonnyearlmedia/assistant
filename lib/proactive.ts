@@ -2,7 +2,7 @@
 // reminders/leave-now, morning briefs, and first-days learning / accountability check-ins.
 import { db, User } from "./db";
 import * as mem from "./memory";
-import { composeProactive } from "./brain";
+import { composeProactive, think } from "./brain";
 import { sendBubbles } from "./send";
 import * as maps from "./integrations/maps";
 import * as notion from "./integrations/notion";
@@ -30,7 +30,9 @@ function nowParts(tz: string) {
     hour12: false,
   });
   const p: any = Object.fromEntries(f.formatToParts(new Date()).map((x) => [x.type, x.value]));
-  return { date: `${p.year}-${p.month}-${p.day}`, hour: parseInt(p.hour), minute: parseInt(p.minute) };
+  const date = `${p.year}-${p.month}-${p.day}`;
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay(); // 0=sun..6=sat for that local date
+  return { date, hour: parseInt(p.hour), minute: parseInt(p.minute), weekday };
 }
 
 // 1) fire reminders that are due (accounting for lead time). adds live drive time for located ones.
@@ -147,12 +149,33 @@ export async function proactiveCheckin(): Promise<number> {
   return sent;
 }
 
+// 4) user-defined automations (playbooks flagged automation:true) — run via full tool loop
+export async function runAutomations(): Promise<number> {
+  let ran = 0;
+  for (const user of await allUsers()) {
+    const { hour, date, weekday } = nowParts(user.timezone || "America/New_York");
+    const { data: pbs } = await db.from("playbooks").select("*").eq("user_id", user.id).eq("active", true);
+    for (const p of pbs || []) {
+      const f: any = p.format || {};
+      if (!f.automation || f.hour !== hour) continue;
+      if (f.weekday != null && f.weekday !== weekday) continue;
+      if (f.last_run === date) continue;
+      const reply = await think(user, `(scheduled automation "${p.name}") ${p.instructions}`);
+      await sendBubbles(user.id, user.phone, (user as any).linq_chat_id, reply);
+      await db.from("playbooks").update({ format: { ...f, last_run: date } }).eq("id", p.id);
+      ran++;
+    }
+  }
+  return ran;
+}
+
 export async function runTick() {
   const out: any = {};
   for (const [name, fn] of [
     ["reminders", dispatchDueReminders],
     ["brief", runDailyBrief],
     ["checkin", proactiveCheckin],
+    ["automations", runAutomations],
   ] as const) {
     try {
       out[name] = await fn();

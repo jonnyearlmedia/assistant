@@ -89,6 +89,36 @@ export async function fetchMedia(
   }
 }
 
+/**
+ * Verify a Linq inbound webhook using the Svix-style signature (secret is `whsec_...`).
+ * Non-fatal by design: returns {ok,reason} so the caller can log in rollout and only reject
+ * once LINQ_ENFORCE_SIG=1 is set and we've confirmed the scheme against real traffic.
+ */
+export function verifyLinq(rawBody: string, headers: Headers): { ok: boolean; reason: string } {
+  const secret = process.env.LINQ_WEBHOOK_SECRET;
+  if (!secret) return { ok: true, reason: "no secret configured" };
+  const id = headers.get("webhook-id") || headers.get("linq-webhook-id");
+  const ts = headers.get("webhook-timestamp") || headers.get("linq-webhook-timestamp");
+  const sigHeader =
+    headers.get("webhook-signature") || headers.get("linq-signature") || headers.get("x-linq-signature");
+  if (!id || !ts || !sigHeader) return { ok: false, reason: "missing signature headers" };
+  try {
+    const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+    const expected = crypto.createHmac("sha256", key).update(`${id}.${ts}.${rawBody}`).digest("base64");
+    const provided = sigHeader.split(" ").map((s) => (s.includes(",") ? s.split(",")[1] : s));
+    const ok = provided.some((p) => {
+      try {
+        return crypto.timingSafeEqual(Buffer.from(p), Buffer.from(expected));
+      } catch {
+        return false;
+      }
+    });
+    return { ok, reason: ok ? "verified" : "signature mismatch" };
+  } catch (e: any) {
+    return { ok: false, reason: `verify error: ${e?.message || e}` };
+  }
+}
+
 /** Normalize a Linq inbound webhook payload into a simple shape lexa's brain consumes. */
 export interface InboundMessage {
   from: string;

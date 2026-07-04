@@ -2,7 +2,7 @@
 // (debounce) so rapid-fire messages get coalesced into one coherent reply instead of stumbling.
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
-import { verifyWebhook, parseInbound, sendMessage, startTyping, markRead, InboundMessage } from "@/lib/linq";
+import { verifyLinq, parseInbound, sendMessage, startTyping, markRead, InboundMessage } from "@/lib/linq";
 import { resolveUser, User, db } from "@/lib/db";
 import { think } from "@/lib/brain";
 import * as mem from "@/lib/memory";
@@ -59,10 +59,13 @@ async function replyAfterSettle(user: User, from: string, chatId: string | undef
 
 export async function POST(req: NextRequest) {
   const raw = await req.text();
-  const sig = req.headers.get("x-linq-signature") || req.headers.get("linq-signature");
-
-  if (!verifyWebhook(raw, sig)) {
-    return NextResponse.json({ error: "bad signature" }, { status: 401 });
+  const v = verifyLinq(raw, req.headers);
+  if (!v.ok) {
+    console.warn("[lexa] linq signature:", v.reason);
+    // rollout-safe: only reject once we've confirmed the scheme against real traffic
+    if (process.env.LINQ_ENFORCE_SIG === "1") {
+      return NextResponse.json({ error: "bad signature" }, { status: 401 });
+    }
   }
 
   let payload: any;
@@ -109,5 +112,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "human-v1" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "complete-v1" });
 }
