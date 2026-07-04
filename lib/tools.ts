@@ -7,6 +7,8 @@ import { db } from "./db";
 import * as mem from "./memory";
 import * as notion from "./integrations/notion";
 import * as maps from "./integrations/maps";
+import * as ticktick from "./integrations/ticktick";
+import * as google from "./integrations/google";
 
 export const TOOLS: Anthropic.Tool[] = [
   {
@@ -118,8 +120,22 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "gmail_search",
-    description: "Search jonny's Gmail and summarize.",
+    description: "Search jonny's Gmail (Gmail query syntax) and summarize the top results.",
     input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "gcal_upcoming",
+    description: "List jonny's upcoming Google Calendar events (note: his primary planner is TickTick).",
+    input_schema: { type: "object", properties: { limit: { type: "number" } } },
+  },
+  {
+    name: "gcal_create",
+    description: "Create a Google Calendar event. start/end are ISO8601. Verified read-back.",
+    input_schema: {
+      type: "object",
+      properties: { title: { type: "string" }, start: { type: "string" }, end: { type: "string" }, location: { type: "string" } },
+      required: ["title", "start"],
+    },
   },
   {
     name: "drive_time",
@@ -179,8 +195,10 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         });
       }
       case "ticktick_create_task":
-        if (!(await integrationConnected(u, "ticktick"))) return NOT_CONNECTED("TickTick");
-        return "TickTick client not implemented in this build yet.";
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(
+          await ticktick.createTask({ title: input.title, due: input.due, priority: input.priority })
+        );
       case "notion_log": {
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         const f = input.fields || {};
@@ -210,8 +228,16 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         return JSON.stringify(await notion.listMasterPlanner(input.limit || 12));
       case "gmail_search":
-        if (!(await integrationConnected(u, "google"))) return NOT_CONNECTED("Gmail");
-        return "Gmail client not implemented in this build yet.";
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Gmail");
+        return JSON.stringify(await google.gmailSearch(input.query, 5));
+      case "gcal_upcoming":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Calendar");
+        return JSON.stringify(await google.calendarUpcoming(input.limit || 10));
+      case "gcal_create":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Calendar");
+        return JSON.stringify(
+          await google.calendarCreate({ title: input.title, start: input.start, end: input.end, location: input.location })
+        );
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;
