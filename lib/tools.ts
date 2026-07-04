@@ -153,6 +153,11 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "drive_search",
+    description: "Search jonny's Google Drive by filename and return matching files with links.",
+    input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
     name: "drive_time",
     description: "Get live drive time between two places (for 'leave now' reminders).",
     input_schema: {
@@ -260,6 +265,9 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(
           await google.calendarCreate({ title: input.title, start: input.start, end: input.end, location: input.location })
         );
+      case "drive_search":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Drive");
+        return JSON.stringify(await google.driveSearch(input.query, 6));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;

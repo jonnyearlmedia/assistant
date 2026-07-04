@@ -145,6 +145,20 @@ export async function gmailSearch(query: string, max = 5): Promise<{ ok: boolean
   return { ok: true, detail: `${all.length} result(s) across ${slots.length} inbox(es)`, results: all };
 }
 
+export async function driveSearch(query: string, max = 6): Promise<{ ok: boolean; detail: string; files?: any[] }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const q = encodeURIComponent(`name contains '${(query || "").replace(/'/g, "")}' and trashed=false`);
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=${max}&fields=files(id,name,mimeType,modifiedTime,webViewLink)`,
+    { headers: { Authorization: `Bearer ${t}` } }
+  );
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
+  const files = (d.files || []).map((f: any) => ({ name: f.name, type: f.mimeType, link: f.webViewLink, modified: f.modifiedTime }));
+  return { ok: true, detail: `${files.length} file(s)`, files };
+}
+
 export async function calendarUpcoming(max = 10): Promise<{ ok: boolean; detail: string; events?: any[] }> {
   const t = await accessToken("google");
   if (!t) return { ok: false, detail: "Google not connected" };
