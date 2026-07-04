@@ -1,0 +1,190 @@
+// the tools lexa can call. memory/reminder/playbook tools are LIVE (Supabase-backed).
+// integration tools (ticktick/notion/gmail/maps) are honest stubs until each service's auth
+// is wired — they return a clear "not connected yet" so lexa never fakes a capability.
+
+import Anthropic from "@anthropic-ai/sdk";
+import { db } from "./db";
+import * as mem from "./memory";
+
+export const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "remember_fact",
+    description:
+      "Save a durable fact about jonny to memory (editable later). Use for routines, preferences, people, health, work context.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: "routine | preference | person | health | work | general" },
+        key: { type: "string", description: "short stable key, e.g. 'wake_time'" },
+        value: { type: "string" },
+      },
+      required: ["category", "key", "value"],
+    },
+  },
+  {
+    name: "forget_fact",
+    description: "Delete a fact from memory. Use when jonny says forget it / that's wrong / no longer true.",
+    input_schema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
+  {
+    name: "list_facts",
+    description: "List everything lexa currently remembers about jonny. Use when he asks 'what do you know about me'.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_goal",
+    description: "Record a goal to hold jonny accountable to.",
+    input_schema: {
+      type: "object",
+      properties: { title: { type: "string" }, detail: { type: "string" }, cadence: { type: "string" } },
+      required: ["title"],
+    },
+  },
+  {
+    name: "save_playbook",
+    description:
+      "Save a reusable workflow or strict format jonny taught you (e.g. how to log health_mood, or a task-routing rule). This is how you learn new behavior without a code change.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        instructions: { type: "string", description: "exactly what to do, in your words" },
+        trigger: { type: "string", description: "when to run it" },
+        format: { type: "object", description: "strict field schema for structured logs" },
+        target: { type: "object", description: "where it writes, e.g. {notion_db_id: '...'}" },
+      },
+      required: ["name", "instructions"],
+    },
+  },
+  {
+    name: "schedule_reminder",
+    description:
+      "Schedule a reminder/nudge. For 'leave now' set location + lead_time_min so drive time can be added. due_at is ISO8601.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        body: { type: "string" },
+        due_at: { type: "string" },
+        lead_time_min: { type: "number" },
+        location: { type: "string" },
+        recurrence: { type: "string" },
+      },
+      required: ["title", "due_at"],
+    },
+  },
+  {
+    name: "list_reminders",
+    description: "List jonny's upcoming scheduled reminders.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "route_todo",
+    description:
+      "Decide where a to-do belongs: ticktick (schedulable/recording), master_planner (planner/project), or short_term (lightweight). Returns the routing decision; then call the matching create tool.",
+    input_schema: {
+      type: "object",
+      properties: { text: { type: "string" }, area: { type: "string", description: "school|work|project|today|week|..." } },
+      required: ["text"],
+    },
+  },
+  // --- integrations (stubbed until auth wired) ---
+  {
+    name: "ticktick_create_task",
+    description: "Create a task in TickTick (source of truth for schedule). Verified read-back after write.",
+    input_schema: {
+      type: "object",
+      properties: { title: { type: "string" }, due: { type: "string" }, project: { type: "string" }, priority: { type: "number" } },
+      required: ["title"],
+    },
+  },
+  {
+    name: "notion_log",
+    description: "Append/log to a Notion page or db (e.g. MASTER PLANNER, health_mood). Follows the saved playbook format. Verified read-back after write.",
+    input_schema: {
+      type: "object",
+      properties: { target: { type: "string", description: "master_planner | health_mood | <page/db id>" }, fields: { type: "object" } },
+      required: ["target", "fields"],
+    },
+  },
+  {
+    name: "gmail_search",
+    description: "Search jonny's Gmail and summarize.",
+    input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "drive_time",
+    description: "Get live drive time between two places (for 'leave now' reminders).",
+    input_schema: {
+      type: "object",
+      properties: { origin: { type: "string" }, destination: { type: "string" } },
+      required: ["destination"],
+    },
+  },
+];
+
+async function integrationConnected(userId: string, provider: string): Promise<boolean> {
+  const { data } = await db
+    .from("integrations")
+    .select("status")
+    .eq("user_id", userId)
+    .eq("provider", provider)
+    .maybeSingle();
+  return data?.status === "connected";
+}
+
+const NOT_CONNECTED = (p: string) =>
+  `⚠️ ${p} isn't connected yet — jonny needs to approve the ${p} login before I can do this. Tell him plainly; do NOT pretend it worked.`;
+
+/** Execute a tool call. Returns a string result for the model. */
+export async function dispatch(name: string, input: any, ctx: { userId: string }): Promise<string> {
+  const u = ctx.userId;
+  try {
+    switch (name) {
+      case "remember_fact":
+        return JSON.stringify(await mem.rememberFact(u, input.category, input.key, input.value));
+      case "forget_fact":
+        return JSON.stringify(await mem.forgetFact(u, input.key));
+      case "list_facts":
+        return JSON.stringify(await mem.listFacts(u));
+      case "set_goal":
+        return JSON.stringify(await mem.setGoal(u, input.title, input.detail, input.cadence));
+      case "save_playbook":
+        return JSON.stringify(
+          await mem.savePlaybook(u, input.name, input.instructions, {
+            trigger: input.trigger,
+            format: input.format,
+            target: input.target,
+          })
+        );
+      case "schedule_reminder":
+        return JSON.stringify(await mem.scheduleReminder(u, input));
+      case "list_reminders":
+        return JSON.stringify(await mem.listReminders(u));
+      case "route_todo": {
+        // lightweight heuristic; refined by learned routing playbooks over time
+        return JSON.stringify({
+          text: input.text,
+          suggestion:
+            "decide among ticktick | master_planner | short_term based on whether it's time-bound (ticktick), project/ongoing (master_planner), or a quick throwaway (short_term). confirm with jonny if unsure.",
+        });
+      }
+      case "ticktick_create_task":
+        if (!(await integrationConnected(u, "ticktick"))) return NOT_CONNECTED("TickTick");
+        return "TickTick client not implemented in this build yet.";
+      case "notion_log":
+        if (!(await integrationConnected(u, "notion"))) return NOT_CONNECTED("Notion");
+        return "Notion client not implemented in this build yet.";
+      case "gmail_search":
+        if (!(await integrationConnected(u, "google"))) return NOT_CONNECTED("Gmail");
+        return "Gmail client not implemented in this build yet.";
+      case "drive_time":
+        if (!process.env.GOOGLE_MAPS_API_KEY) return NOT_CONNECTED("Google Maps");
+        return "Maps client not implemented in this build yet.";
+      default:
+        return `unknown tool: ${name}`;
+    }
+  } catch (e: any) {
+    return `tool error (${name}): ${e?.message || String(e)}`;
+  }
+}
