@@ -44,18 +44,26 @@ export async function POST(req: NextRequest) {
 
     const reply = await think(user, inbound.text, inbound.media);
 
-    const sent = await sendMessage(inbound.from, reply);
-    await mem.logMessage(user.id, "outbound", reply, {
-      linq_message_id: sent.messageId,
-      status: sent.ok ? "sent" : "failed",
-    });
+    // send as multiple real-texter bubbles (split on blank lines) instead of one wall of text
+    let bubbles = reply
+      .split(/\n\s*\n+/)
+      .map((b) => b.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (bubbles.length === 0) bubbles = [reply.trim() || "…"];
 
-    if (!sent.ok) {
-      // reliability: don't silently drop. surface for the retry queue.
-      console.error("[lexa] send failed:", sent.error);
+    for (let i = 0; i < bubbles.length; i++) {
+      const sent = await sendMessage(inbound.from, bubbles[i]);
+      await mem.logMessage(user.id, "outbound", bubbles[i], {
+        linq_message_id: sent.messageId,
+        status: sent.ok ? "sent" : "failed",
+      });
+      if (!sent.ok) console.error("[lexa] send failed:", sent.error);
+      // small human-ish gap so bubbles land in order as separate messages
+      if (i < bubbles.length - 1) await new Promise((r) => setTimeout(r, 650));
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, bubbles: bubbles.length });
   } catch (e: any) {
     console.error("[lexa] webhook error:", e?.message || e);
     return NextResponse.json({ error: "internal" }, { status: 500 });
@@ -64,5 +72,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "parser-v2" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "bubbles-v1" });
 }
