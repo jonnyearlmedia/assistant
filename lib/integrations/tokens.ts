@@ -18,20 +18,24 @@ export interface TokenSet {
   expires_at?: string | null;
 }
 
-export async function saveIntegration(userId: string, provider: string, tok: TokenSet) {
-  await db.from("integrations").upsert(
-    {
-      user_id: userId,
-      provider,
-      access_token: tok.access_token,
-      refresh_token: tok.refresh_token ?? null,
-      scope: tok.scope ?? null,
-      expires_at: tok.expires_at ?? null,
-      status: "connected",
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id,provider" }
-  );
+export async function saveIntegration(
+  userId: string,
+  provider: string,
+  tok: TokenSet,
+  meta?: Record<string, any>
+) {
+  const row: any = {
+    user_id: userId,
+    provider,
+    access_token: tok.access_token,
+    refresh_token: tok.refresh_token ?? null,
+    scope: tok.scope ?? null,
+    expires_at: tok.expires_at ?? null,
+    status: "connected",
+    updated_at: new Date().toISOString(),
+  };
+  if (meta !== undefined) row.meta = meta; // omit on refresh so existing meta (email) is preserved
+  await db.from("integrations").upsert(row, { onConflict: "user_id,provider" });
 }
 
 export async function getIntegration(userId: string, provider: string) {
