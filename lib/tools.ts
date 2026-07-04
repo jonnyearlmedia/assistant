@@ -5,6 +5,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { db } from "./db";
 import * as mem from "./memory";
+import * as notion from "./integrations/notion";
+import * as maps from "./integrations/maps";
 
 export const TOOLS: Anthropic.Tool[] = [
   {
@@ -100,12 +102,19 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "notion_log",
-    description: "Append/log to a Notion page or db (e.g. MASTER PLANNER, health_mood). Follows the saved playbook format. Verified read-back after write.",
+    description:
+      "Write to Notion. target='master_planner' creates a task in the MASTER PLANNER db — fields: {task (required), due (ISO date), status, priority, project, type, category, firmness, critical (bool), focus (bool), tags (string[])}. target='health_mood' is the mood tracker (strict format — only if you have the playbook). VERIFIED read-back after write; report verified:false honestly, never fake it.",
     input_schema: {
       type: "object",
       properties: { target: { type: "string", description: "master_planner | health_mood | <page/db id>" }, fields: { type: "object" } },
       required: ["target", "fields"],
     },
+  },
+  {
+    name: "list_master_planner",
+    description:
+      "Read jonny's current tasks from the Notion MASTER PLANNER database (task, status, due, priority, project). Use for 'what's on my planner', planning, or before adding to avoid dupes.",
+    input_schema: { type: "object", properties: { limit: { type: "number" } } },
   },
   {
     name: "gmail_search",
@@ -172,15 +181,51 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "ticktick_create_task":
         if (!(await integrationConnected(u, "ticktick"))) return NOT_CONNECTED("TickTick");
         return "TickTick client not implemented in this build yet.";
-      case "notion_log":
-        if (!(await integrationConnected(u, "notion"))) return NOT_CONNECTED("Notion");
-        return "Notion client not implemented in this build yet.";
+      case "notion_log": {
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        const f = input.fields || {};
+        if (input.target === "master_planner") {
+          return JSON.stringify(
+            await notion.createMasterPlannerTask({
+              task: f.task || f.title || f.name,
+              due: f.due || f.due_date,
+              status: f.status,
+              priority: f.priority,
+              project: f.project,
+              type: f.type,
+              category: f.category,
+              firmness: f.firmness,
+              tags: f.tags,
+              critical: f.critical,
+              focus: f.focus,
+            })
+          );
+        }
+        if (input.target === "health_mood") {
+          return "health_mood format isn't mapped yet — ask jonny for the exact fields + options ONCE, save it as a playbook, then log. do NOT guess the format or fake the entry.";
+        }
+        return `notion target '${input.target}' not wired yet.`;
+      }
+      case "list_master_planner":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.listMasterPlanner(input.limit || 12));
       case "gmail_search":
         if (!(await integrationConnected(u, "google"))) return NOT_CONNECTED("Gmail");
         return "Gmail client not implemented in this build yet.";
-      case "drive_time":
-        if (!process.env.GOOGLE_MAPS_API_KEY) return NOT_CONNECTED("Google Maps");
-        return "Maps client not implemented in this build yet.";
+      case "drive_time": {
+        if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
+        let origin = input.origin;
+        if (!origin) {
+          const { data } = await db
+            .from("users")
+            .select("home_address,last_address")
+            .eq("id", u)
+            .maybeSingle();
+          origin = data?.last_address || data?.home_address;
+        }
+        if (!origin) return "need an origin — set jonny's home address or share location first.";
+        return JSON.stringify(await maps.driveTime(origin, input.destination));
+      }
       default:
         return `unknown tool: ${name}`;
     }
