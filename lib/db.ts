@@ -1,16 +1,30 @@
-// server-side Supabase client (service role). lexa's memory lives here.
-import { createClient } from "@supabase/supabase-js";
+// server-side Supabase client (lazy). lexa's memory lives here.
+// IMPORTANT: the client is created lazily via a Proxy so that importing this module at BUILD
+// time (when env vars aren't present) never calls createClient() — that would throw
+// "supabaseUrl is required" during Next's page-data collection. It only initializes on first
+// real use at runtime, where the env vars exist.
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-const url = process.env.SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let _client: SupabaseClient | null = null;
 
-if (!url || !key) {
-  // don't throw at import time on Vercel build; fail loudly at first use instead.
-  console.warn("[lexa] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set");
+function getClient(): SupabaseClient {
+  if (_client) return _client;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error("[lexa] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set");
+  }
+  _client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return _client;
 }
 
-export const db = createClient(url || "", key || "", {
-  auth: { persistSession: false, autoRefreshToken: false },
+// proxy so existing `db.from(...)` call sites keep working, but nothing runs until first access
+export const db: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop, receiver) {
+    const c = getClient();
+    const value = Reflect.get(c as any, prop, receiver);
+    return typeof value === "function" ? value.bind(c) : value;
+  },
 });
 
 export interface User {
