@@ -80,25 +80,31 @@ export interface InboundMessage {
 }
 
 export function parseInbound(payload: any): InboundMessage | null {
-  // tolerant parser — Linq nests message under a few possible shapes; refine once we see live events.
-  const msg = payload?.message ?? payload?.data?.message ?? payload;
-  const from =
-    payload?.from ?? msg?.from ?? payload?.chat?.participants?.[0] ?? null;
+  // matches Linq's real message.received shape (webhook_version 2026-02-03):
+  // { event_type, data: { id, direction, sender_handle: {handle, is_me}, parts: [{type,value|url}], service, chat } }
+  const data = payload?.data;
+  if (!data) return null;
+
+  // only real inbound messages from the other person — never react to our own echoed sends
+  if (data.direction && data.direction !== "inbound") return null;
+  if (data?.sender_handle?.is_me === true) return null;
+
+  const from: string | undefined = data?.sender_handle?.handle;
   if (!from) return null;
 
-  const parts: any[] = msg?.parts ?? [];
+  const parts: any[] = Array.isArray(data.parts) ? data.parts : [];
   const text = parts
     .filter((p) => p?.type === "text")
     .map((p) => p.value)
     .join("\n")
-    .trim() || (typeof msg?.text === "string" ? msg.text : "");
+    .trim();
   const media = parts.filter((p) => p?.type === "media").map((p) => p.url).filter(Boolean);
 
   return {
     from,
     text,
     media,
-    messageId: msg?.id ?? payload?.id,
-    channel: msg?.channel ?? payload?.channel,
+    messageId: data.id,
+    channel: data.service,
   };
 }

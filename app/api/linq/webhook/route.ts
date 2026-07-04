@@ -64,5 +64,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "parser-v2" });
 }
