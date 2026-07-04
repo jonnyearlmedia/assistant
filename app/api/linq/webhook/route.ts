@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { verifyWebhook, parseInbound, sendMessage, startTyping, markRead, InboundMessage } from "@/lib/linq";
-import { resolveUser, User } from "@/lib/db";
+import { resolveUser, User, db } from "@/lib/db";
 import { think } from "@/lib/brain";
 import * as mem from "@/lib/memory";
 
@@ -87,6 +87,10 @@ export async function POST(req: NextRequest) {
   try {
     const user = await resolveUser(inbound.from);
     markRead(inbound.chatId); // read receipt (best-effort, fire-and-forget)
+    // remember the chat id so lexa can show typing when she reaches out proactively
+    if (inbound.chatId && (user as any).linq_chat_id !== inbound.chatId) {
+      db.from("users").update({ linq_chat_id: inbound.chatId }).eq("id", user.id).then(() => {});
+    }
     const msg = await mem.logMessage(user.id, "inbound", inbound.text, {
       channel: inbound.channel,
       media: inbound.media,

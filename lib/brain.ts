@@ -85,3 +85,42 @@ export async function think(
 
   return (reply || "gimme a sec, that one got tangled — try me again?").trim();
 }
+
+// lexa reaching out FIRST (proactive): morning briefs, reminders, nudges, learning check-ins.
+// single call, no tools — just composes what she'd text right now given the situation + her memory.
+export async function composeProactive(
+  user: User,
+  situation: string,
+  context?: string
+): Promise<string> {
+  const [facts, goals, playbooks] = await Promise.all([
+    mem.listFacts(user.id),
+    mem.listGoals(user.id),
+    mem.listPlaybooks(user.id),
+  ]);
+  const system = buildSystemPrompt({
+    name: user.name ?? undefined,
+    timezone: user.timezone,
+    now: new Date().toLocaleString("en-US", { timeZone: user.timezone }),
+    onboardingStage: user.onboarding_stage,
+    facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
+    goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
+    playbooks: playbooks.map((p) => `- ${p.name}: ${p.instructions}`).join("\n"),
+  });
+  const prompt = `you're reaching out to ${user.name ?? "jonny"} FIRST, unprompted — he did not just text you.
+SITUATION: ${situation}
+${context ? `\nRELEVANT DATA:\n${context}\n` : ""}
+write exactly what you'd text him right now. keep it short + natural, real bubbles separated by blank lines. don't overexplain that you're being proactive — just text him like a friend would.`;
+
+  const res = await client.messages.create({
+    model: MODEL,
+    max_tokens: 600,
+    system,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+}
