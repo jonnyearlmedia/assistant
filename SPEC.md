@@ -49,6 +49,16 @@ lexa's non-negotiables come straight from that list.
   exact schema and logs in that format, on time, verified. this is a flagship "no phantom log" case.
 - lexa can learn NEW notion formats/dbs conversationally (see "conversational teaching").
 
+## task routing (jonny has to-dos across many life areas)
+
+school, work, specific work projects, today, this week — lexa triages every to-do into the
+right home instead of one big pile. three altitudes:
+- **TickTick (recording level)** — time-bound / schedulable / needs a reminder. source of truth.
+- **Notion MASTER PLANNER (planner level)** — bigger-picture, ongoing, project-level.
+- **short-term list (lightweight)** — quick throwaways, kept in lexa's memory, cleared fast.
+ambiguous → she makes a call, tells you where it went, you correct, she saves the correction as a
+routing rule (playbook). over time she learns your taxonomy and routes automatically.
+
 ## email (full Gmail)
 
 - read, triage, summarize, draft — and, with its own Google OAuth, actually SEND
