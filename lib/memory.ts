@@ -143,14 +143,12 @@ export async function logBehavior(
   await db.from("behavior_log").insert({ user_id: userId, event_type, ...opts });
 }
 
-// recent conversation for context
-export async function recentMessages(userId: string, limit = 20) {
-  const { data } = await db
-    .from("messages")
-    .select("direction,body,created_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+// recent conversation for context. beforeIso lets us load history strictly BEFORE the current
+// (debounced) batch so those messages aren't duplicated as both history and the current turn.
+export async function recentMessages(userId: string, limit = 20, beforeIso?: string) {
+  let q = db.from("messages").select("direction,body,created_at").eq("user_id", userId);
+  if (beforeIso) q = q.lt("created_at", beforeIso);
+  const { data } = await q.order("created_at", { ascending: false }).limit(limit);
   return (data ?? []).reverse();
 }
 
@@ -159,6 +157,43 @@ export async function logMessage(
   direction: "inbound" | "outbound",
   body: string,
   extra: { channel?: string; media?: any; linq_message_id?: string; status?: string } = {}
-) {
-  await db.from("messages").insert({ user_id: userId, direction, body, ...extra });
+): Promise<{ id: string; created_at: string } | null> {
+  const { data } = await db
+    .from("messages")
+    .insert({ user_id: userId, direction, body, ...extra })
+    .select("id,created_at")
+    .single();
+  return (data as any) ?? null;
+}
+
+// --- debounce / message coalescing (so lexa waits until jonny's done spamming) ---
+
+// is there an inbound message newer than mine? if so, that later invocation will handle the batch.
+export async function hasNewerInbound(userId: string, afterIso: string): Promise<boolean> {
+  const { data } = await db
+    .from("messages")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("direction", "inbound")
+    .gt("created_at", afterIso)
+    .limit(1);
+  return (data?.length ?? 0) > 0;
+}
+
+// all unhandled inbound messages (the batch), oldest first
+export async function pendingInbound(userId: string) {
+  const { data } = await db
+    .from("messages")
+    .select("id,body,media,created_at")
+    .eq("user_id", userId)
+    .eq("direction", "inbound")
+    .eq("status", "received")
+    .order("created_at", { ascending: true });
+  return data ?? [];
+}
+
+// claim the batch so it isn't processed twice
+export async function markHandled(ids: string[]) {
+  if (!ids.length) return;
+  await db.from("messages").update({ status: "handled" }).in("id", ids);
 }

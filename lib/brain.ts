@@ -12,13 +12,18 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.LEXA_MODEL || "claude-sonnet-5";
 const MAX_TOOL_TURNS = 8;
 
-export async function think(user: User, incomingText: string, media: string[] = []): Promise<string> {
+export async function think(
+  user: User,
+  incomingText: string,
+  media: string[] = [],
+  opts: { historyBefore?: string } = {}
+): Promise<string> {
   // load memory into context
   const [facts, goals, playbooks, history] = await Promise.all([
     mem.listFacts(user.id),
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
-    mem.recentMessages(user.id, 20),
+    mem.recentMessages(user.id, 20, opts.historyBefore),
   ]);
 
   const system = buildSystemPrompt({

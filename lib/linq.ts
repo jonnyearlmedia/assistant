@@ -77,6 +77,31 @@ export interface InboundMessage {
   media: string[];
   messageId?: string;
   channel?: string;
+  chatId?: string;
+}
+
+function authHeaders() {
+  return { Authorization: `Bearer ${process.env.LINQ_API_KEY}`, "Content-Type": "application/json" };
+}
+
+/** Show the iMessage typing bubble (auto-clears on send; ~60s TTL). iMessage 1:1 only. */
+export async function startTyping(chatId?: string): Promise<void> {
+  if (!chatId || !process.env.LINQ_API_KEY) return;
+  try {
+    await fetch(`${BASE}/chats/${chatId}/typing`, { method: "POST", headers: authHeaders() });
+  } catch {
+    /* typing is best-effort; never block a reply on it */
+  }
+}
+
+/** Best-effort read receipt. Endpoint isn't formally documented; we try and swallow failures. */
+export async function markRead(chatId?: string): Promise<void> {
+  if (!chatId || !process.env.LINQ_API_KEY) return;
+  try {
+    await fetch(`${BASE}/chats/${chatId}/read`, { method: "POST", headers: authHeaders() });
+  } catch {
+    /* if the endpoint 404s, read receipts likely need a dashboard toggle on the line */
+  }
 }
 
 export function parseInbound(payload: any): InboundMessage | null {
@@ -106,5 +131,6 @@ export function parseInbound(payload: any): InboundMessage | null {
     media,
     messageId: data.id,
     channel: data.service,
+    chatId: data?.chat?.id,
   };
 }

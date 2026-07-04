@@ -1,11 +1,61 @@
-// inbound Linq webhook: a text arrives here, lexa thinks, lexa replies.
+// inbound Linq webhook: a text arrives, we ACK instantly, then reply AFTER jonny stops texting
+// (debounce) so rapid-fire messages get coalesced into one coherent reply instead of stumbling.
 import { NextRequest, NextResponse } from "next/server";
-import { verifyWebhook, parseInbound, sendMessage } from "@/lib/linq";
-import { resolveUser } from "@/lib/db";
+import { waitUntil } from "@vercel/functions";
+import { verifyWebhook, parseInbound, sendMessage, startTyping, markRead, InboundMessage } from "@/lib/linq";
+import { resolveUser, User } from "@/lib/db";
 import { think } from "@/lib/brain";
 import * as mem from "@/lib/memory";
 
 export const runtime = "nodejs";
+
+// how long lexa waits for silence before replying. each new text resets it (they're spamming a thought).
+const SETTLE_MS = Number(process.env.SETTLE_MS || 6000);
+
+// human-ish "typing" pause before a bubble — scales with length but never as slow as real typing
+function typingDelay(text: string): number {
+  return Math.min(1100 + text.length * 33, 4200); // ~1.1s short → ~4.2s cap
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function replyAfterSettle(user: User, from: string, chatId: string | undefined, myCreatedAt: string) {
+  try {
+    await sleep(SETTLE_MS);
+    // a newer text arrived — that later invocation will own the batch. stand down.
+    if (await mem.hasNewerInbound(user.id, myCreatedAt)) return;
+
+    const batch = await mem.pendingInbound(user.id);
+    if (!batch.length) return;
+    const earliest = batch[0].created_at;
+    const combined = batch.map((m: any) => m.body).filter(Boolean).join("\n");
+    const media = batch.flatMap((m: any) => (Array.isArray(m.media) ? m.media : []));
+    await mem.markHandled(batch.map((m: any) => m.id)); // claim the batch
+
+    const reply = await think(user, combined, media, { historyBefore: earliest });
+
+    let bubbles = reply
+      .split(/\n\s*\n+/)
+      .map((b) => b.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (bubbles.length === 0) bubbles = [reply.trim() || "…"];
+
+    for (let i = 0; i < bubbles.length; i++) {
+      // show the typing bubble, pause like she's actually typing, then send (send auto-clears typing)
+      await startTyping(chatId);
+      await sleep(typingDelay(bubbles[i]));
+      const sent = await sendMessage(from, bubbles[i]);
+      await mem.logMessage(user.id, "outbound", bubbles[i], {
+        linq_message_id: sent.messageId,
+        status: sent.ok ? "sent" : "failed",
+      });
+      if (!sent.ok) console.error("[lexa] send failed:", sent.error);
+    }
+  } catch (e: any) {
+    console.error("[lexa] settle handler error:", e?.message || e);
+  }
+}
 
 export async function POST(req: NextRequest) {
   const raw = await req.text();
@@ -36,34 +86,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const user = await resolveUser(inbound.from);
-    await mem.logMessage(user.id, "inbound", inbound.text, {
+    markRead(inbound.chatId); // read receipt (best-effort, fire-and-forget)
+    const msg = await mem.logMessage(user.id, "inbound", inbound.text, {
       channel: inbound.channel,
       media: inbound.media,
       linq_message_id: inbound.messageId,
     });
-
-    const reply = await think(user, inbound.text, inbound.media);
-
-    // send as multiple real-texter bubbles (split on blank lines) instead of one wall of text
-    let bubbles = reply
-      .split(/\n\s*\n+/)
-      .map((b) => b.trim())
-      .filter(Boolean)
-      .slice(0, 6);
-    if (bubbles.length === 0) bubbles = [reply.trim() || "…"];
-
-    for (let i = 0; i < bubbles.length; i++) {
-      const sent = await sendMessage(inbound.from, bubbles[i]);
-      await mem.logMessage(user.id, "outbound", bubbles[i], {
-        linq_message_id: sent.messageId,
-        status: sent.ok ? "sent" : "failed",
-      });
-      if (!sent.ok) console.error("[lexa] send failed:", sent.error);
-      // small human-ish gap so bubbles land in order as separate messages
-      if (i < bubbles.length - 1) await new Promise((r) => setTimeout(r, 650));
-    }
-
-    return NextResponse.json({ ok: true, bubbles: bubbles.length });
+    // ACK Linq immediately; reply in the background once he's done texting (debounce)
+    waitUntil(
+      replyAfterSettle(user, inbound.from, inbound.chatId, msg?.created_at ?? new Date().toISOString())
+    );
+    return NextResponse.json({ ok: true, queued: true });
   } catch (e: any) {
     console.error("[lexa] webhook error:", e?.message || e);
     return NextResponse.json({ error: "internal" }, { status: 500 });
@@ -72,5 +105,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "bubbles-v1" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "human-v1" });
 }
