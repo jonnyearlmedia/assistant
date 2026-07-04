@@ -70,6 +70,25 @@ export function verifyWebhook(rawBody: string, signature: string | null): boolea
   }
 }
 
+/** Fetch an inbound media attachment (e.g. a photo) and return it base64-encoded for vision. */
+export async function fetchMedia(
+  url: string
+): Promise<{ mediaType: string; data: string } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: process.env.LINQ_API_KEY ? { Authorization: `Bearer ${process.env.LINQ_API_KEY}` } : {},
+    });
+    if (!res.ok) return null;
+    let mediaType = (res.headers.get("content-type") || "image/jpeg").split(";")[0].trim();
+    if (!/^image\//.test(mediaType)) return null; // only images go to vision
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 4_500_000) return null; // keep payloads sane
+    return { mediaType, data: buf.toString("base64") };
+  } catch {
+    return null;
+  }
+}
+
 /** Normalize a Linq inbound webhook payload into a simple shape lexa's brain consumes. */
 export interface InboundMessage {
   from: string;

@@ -103,6 +103,14 @@ export async function runDailyBrief(): Promise<number> {
       if (cal.ok && cal.events?.length)
         ctx += "\nCALENDAR (upcoming):\n" + cal.events.map((e: any) => `- ${e.title} @ ${e.start}`).join("\n") + "\n";
     } catch {}
+    try {
+      const gm = await google.gmailSearch("is:unread newer_than:2d", 6);
+      if (gm.ok && gm.results?.length)
+        ctx +=
+          "\nUNREAD EMAIL (across inboxes — flag anything that actually needs him):\n" +
+          gm.results.map((r: any) => `- [${r.inbox}] "${r.subject}" — ${r.from}`).join("\n") +
+          "\n";
+    } catch {}
 
     const text = await composeProactive(
       user,
