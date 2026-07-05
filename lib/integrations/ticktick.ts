@@ -67,6 +67,47 @@ export async function listProjects(): Promise<{ ok: boolean; projects?: any[]; d
   return { ok: true, projects: d.map((p: any) => ({ id: p.id, name: p.name })) };
 }
 
+// READ jonny's existing tasks/schedule — aggregates across all projects. scope filters by due date.
+export async function listTasks(
+  scope: "today" | "week" | "all" = "all"
+): Promise<{ ok: boolean; tasks?: any[]; detail: string }> {
+  const t = await token();
+  if (!t) return { ok: false, detail: "TickTick not connected" };
+  const pr = await fetch(`${API}/project`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!pr.ok) return { ok: false, detail: `ticktick projects read failed: ${pr.status}` };
+  const projects = await pr.json();
+
+  const all: any[] = [];
+  for (const p of projects || []) {
+    try {
+      const d = await fetch(`${API}/project/${p.id}/data`, { headers: { Authorization: `Bearer ${t}` } });
+      if (!d.ok) continue;
+      const data = await d.json();
+      for (const task of data.tasks || []) {
+        all.push({
+          id: task.id,
+          title: task.title,
+          due: task.dueDate || task.startDate || null,
+          priority: task.priority ?? 0,
+          project: p.name,
+          status: task.status === 2 ? "done" : "active",
+        });
+      }
+    } catch {
+      /* skip a project that won't read */
+    }
+  }
+
+  let tasks = all.filter((x) => x.status !== "done");
+  if (scope === "today" || scope === "week") {
+    const end = new Date();
+    end.setDate(end.getDate() + (scope === "today" ? 1 : 7));
+    tasks = tasks.filter((x) => x.due && new Date(x.due) <= end);
+  }
+  tasks.sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+  return { ok: true, tasks, detail: `${tasks.length} task(s) across ${(projects || []).length} lists` };
+}
+
 export async function createTask(f: {
   title: string;
   due?: string;

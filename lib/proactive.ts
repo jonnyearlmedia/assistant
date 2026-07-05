@@ -7,6 +7,7 @@ import { sendBubbles } from "./send";
 import * as maps from "./integrations/maps";
 import * as notion from "./integrations/notion";
 import * as google from "./integrations/google";
+import * as ticktick from "./integrations/ticktick";
 
 async function getUser(id: string): Promise<User | null> {
   const { data } = await db.from("users").select("*").eq("id", id).maybeSingle();
@@ -92,6 +93,14 @@ export async function runDailyBrief(): Promise<number> {
     if ((user.settings as any)?.last_brief === date) continue;
 
     let ctx = "";
+    try {
+      const tt = await ticktick.listTasks("today");
+      if (tt.ok && tt.tasks?.length)
+        ctx +=
+          "TODAY / SOON (TickTick — source of truth):\n" +
+          tt.tasks.map((x: any) => `- ${x.title}${x.due ? ` @ ${x.due}` : ""} (${x.project})`).join("\n") +
+          "\n";
+    } catch {}
     try {
       const mp = await notion.listMasterPlanner(8);
       if (mp.ok && mp.tasks?.length)

@@ -118,6 +118,12 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "ticktick_list",
+    description:
+      "READ jonny's existing tasks/schedule from TickTick (his source of truth). scope: 'today' | 'week' | 'all'. Use for 'what's on my schedule', 'what do i have today/this week', or before planning. Returns title, due, priority, list.",
+    input_schema: { type: "object", properties: { scope: { type: "string", description: "today | week | all" } } },
+  },
+  {
     name: "notion_log",
     description:
       "Write to Notion. target='master_planner' creates a task in the MASTER PLANNER db — fields: {task (required), due (ISO date), status, priority, project, type, category, firmness, critical (bool), focus (bool), tags (string[])}. target='health_mood' is the mood tracker (strict format — only if you have the playbook). VERIFIED read-back after write; report verified:false honestly, never fake it.",
@@ -226,6 +232,9 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(
           await ticktick.createTask({ title: input.title, due: input.due, priority: input.priority })
         );
+      case "ticktick_list":
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(await ticktick.listTasks(input.scope || "all"));
       case "notion_log": {
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         const f = input.fields || {};
