@@ -9,6 +9,7 @@ import * as notion from "./integrations/notion";
 import * as maps from "./integrations/maps";
 import * as ticktick from "./integrations/ticktick";
 import * as google from "./integrations/google";
+import * as spend from "./spend";
 
 export const TOOLS: Anthropic.Tool[] = [
   {
@@ -305,6 +306,15 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["id", "status"],
     },
   },
+  {
+    name: "spend_report",
+    description:
+      "Estimate what you (the AI) are costing jonny, from the token usage log. Call this when he asks about cost / spend / 'how much are you costing me' / his Anthropic bill. period: today | week | month | all. Returns a ~dollar estimate + a breakdown by function (think = full brain, triage = cheap Haiku, proactive = your outreach). It's an ESTIMATE off logged tokens — tell him with a '~', don't present it as an exact invoice.",
+    input_schema: {
+      type: "object",
+      properties: { period: { type: "string", description: "today | week | month | all" } },
+    },
+  },
 ];
 
 async function integrationConnected(userId: string, provider: string): Promise<boolean> {
@@ -477,6 +487,8 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(await mem.listOpenCommitments(u));
       case "resolve_commitment":
         return JSON.stringify(await mem.resolveCommitment(u, input.id, input.status, input.outcome));
+      case "spend_report":
+        return JSON.stringify(await spend.computeSpend(spend.periodSince(input.period || "week")));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;
