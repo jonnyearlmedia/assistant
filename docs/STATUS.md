@@ -40,6 +40,21 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   cache_write/output (fire-and-forget from `logUsage` in `lib/brain.ts`). Query it to verify
   cache hits and compute spend. `composeProactive` is intentionally uncached (no tools in prefix).
 
+**Reliability layer (durable queue — shipped 2026-07-06, verify in prod after merge)**
+- `lib/queue.ts` wires up the `jobs` table that had sat unused since the original schema:
+  atomic claim (overlap-safe), retry with exponential backoff (2→60 min), dead-letter after
+  max_attempts (kept inspectable), `dedupe_key` exactly-once, stuck-`running` reaper, prune.
+- `runTick` takes a 5-min lease (`tick_lease` dedupe row) → overlapping cron fires can't
+  double-run the engine. Brief/check-in/automations are enqueued with `brief-{user}-{date}`-style
+  dedupe keys (exactly once per day by construction), then executed by `JOB_HANDLERS` with retries —
+  a flaky Linq call no longer costs the whole brief. Reminders claim their row (scheduled→sending)
+  and revert on failure. A totally-failed webhook reply re-enqueues as `send_message` (durable send).
+- `lib/audit.ts` wires up the previously-unused `write_audits` ledger: every external write
+  (TickTick/Notion/Gmail/GCal) records requested payload + read-back verified flag.
+- POST-DEPLOY VERIFY: `GET /api/linq/webhook` → rev `durable-queue-v5`; watch a real tick land
+  one `tick_lease` done-row per window in `jobs`; `?force=jobs` to drain on demand; confirm
+  `write_audits` rows appear after her next external write.
+
 **Proactive engine** (`/api/cron/tick`, driven by GitHub 15-min pinger + daily Vercel cron)
 - ⚠️ HISTORY (2026-07-06): the engine was DEAD until this date — the 15-min GitHub cron only runs
   from `main`, and the code only reached `main` the morning of 07-06. First real brief sent 07-06.

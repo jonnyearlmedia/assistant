@@ -1,5 +1,6 @@
 // TickTick (jonny's source-of-truth calendar). OAuth2 + task ops with verified read-back.
 import { ownerUserId, getIntegration, saveIntegration } from "./tokens";
+import { auditWrite } from "../audit";
 
 const AUTH = "https://ticktick.com/oauth/authorize";
 const TOKEN_URL = "https://ticktick.com/oauth/token";
@@ -70,7 +71,7 @@ export async function listProjects(): Promise<{ ok: boolean; projects?: any[]; d
 // READ jonny's existing tasks/schedule — aggregates across all projects. scope filters by due date.
 export async function listTasks(
   scope: "today" | "week" | "all" = "all"
-): Promise<{ ok: boolean; tasks?: any[]; detail: string }> {
+): Promise<{ ok: boolean; detail: string; [k: string]: any }> {
   const t = await token();
   if (!t) return { ok: false, detail: "TickTick not connected" };
   const pr = await fetch(`${API}/project`, { headers: { Authorization: `Bearer ${t}` } });
@@ -151,7 +152,16 @@ export async function completeTask(projectId: string, taskId: string): Promise<{
     method: "POST",
     headers: { Authorization: `Bearer ${t}` },
   });
-  return { ok: res.ok, detail: res.ok ? `completed task ${taskId}` : `complete failed: ${res.status} ${(await res.text()).slice(0, 100)}` };
+  const detail = res.ok ? `completed task ${taskId}` : `complete failed: ${res.status} ${(await res.text()).slice(0, 100)}`;
+  // cheap read-back: a completed task reads back with status 2 (or drops out of the project)
+  let verified = false;
+  if (res.ok) {
+    const check = await fetch(`${API}/project/${projectId}/task/${taskId}`, { headers: { Authorization: `Bearer ${t}` } });
+    const cd = check.ok ? await check.json().catch(() => null) : null;
+    verified = cd?.status === 2 || check.status === 404;
+  }
+  auditWrite("ticktick", "complete_task", { targetRef: taskId, requested: { projectId, taskId }, verified, detail });
+  return { ok: res.ok, detail };
 }
 
 export async function deleteTask(projectId: string, taskId: string): Promise<{ ok: boolean; detail: string }> {
@@ -161,7 +171,15 @@ export async function deleteTask(projectId: string, taskId: string): Promise<{ o
     method: "DELETE",
     headers: { Authorization: `Bearer ${t}` },
   });
-  return { ok: res.ok, detail: res.ok ? `deleted task ${taskId}` : `delete failed: ${res.status}` };
+  const detail = res.ok ? `deleted task ${taskId}` : `delete failed: ${res.status}`;
+  // cheap read-back: GET the deleted task and expect it gone
+  let verified = false;
+  if (res.ok) {
+    const check = await fetch(`${API}/project/${projectId}/task/${taskId}`, { headers: { Authorization: `Bearer ${t}` } });
+    verified = check.status === 404;
+  }
+  auditWrite("ticktick", "delete_task", { targetRef: taskId, requested: { projectId, taskId }, verified, detail });
+  return { ok: res.ok, detail };
 }
 
 // update/reschedule/move a task. moveToProjectId changes which list it lives in.
@@ -194,9 +212,15 @@ export async function updateTask(f: {
     body: JSON.stringify(body),
   });
   const d = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, detail: `update failed: ${JSON.stringify(d).slice(0, 120)}` };
+  if (!res.ok) {
+    const detail = `update failed: ${JSON.stringify(d).slice(0, 120)}`;
+    auditWrite("ticktick", "update_task", { targetRef: f.taskId, requested: { title: f.title, due: f.due, priority: f.priority, moveToProjectId: f.moveToProjectId }, verified: false, detail });
+    return { ok: false, detail };
+  }
   const check = await fetch(`${API}/project/${body.projectId}/task/${f.taskId}`, { headers: { Authorization: `Bearer ${t}` } });
-  return { ok: true, verified: check.ok, detail: `updated "${body.title}"${f.due !== undefined ? ` (due ${f.due})` : ""}${f.moveToProjectId ? " (moved)" : ""}` };
+  const detail = `updated "${body.title}"${f.due !== undefined ? ` (due ${f.due})` : ""}${f.moveToProjectId ? " (moved)" : ""}`;
+  auditWrite("ticktick", "update_task", { targetRef: f.taskId, requested: { title: f.title, due: f.due, priority: f.priority, moveToProjectId: f.moveToProjectId }, verified: check.ok, detail });
+  return { ok: true, verified: check.ok, detail };
 }
 
 export async function createTask(f: {
@@ -220,7 +244,11 @@ export async function createTask(f: {
     body: JSON.stringify(body),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: `ticktick create failed: ${JSON.stringify(d).slice(0, 150)}` };
+  if (!res.ok) {
+    const detail = `ticktick create failed: ${JSON.stringify(d).slice(0, 150)}`;
+    auditWrite("ticktick", "create_task", { requested: { title: f.title.slice(0, 200), due: f.due, priority: f.priority, project: f.project || f.projectId }, verified: false, detail });
+    return { ok: false, detail };
+  }
 
   // VERIFIED read-back
   let verified = false;
@@ -230,12 +258,9 @@ export async function createTask(f: {
     });
     verified = check.ok;
   }
-  return {
-    ok: true,
-    id: d.id,
-    verified,
-    detail: verified
-      ? `created & verified in TickTick: "${d.title}"${f.due ? ` (due ${f.due})` : ""}`
-      : `created in TickTick (id ${d.id}) but couldn't confirm on read-back — say so, don't overclaim`,
-  };
+  const detail = verified
+    ? `created & verified in TickTick: "${d.title}"${f.due ? ` (due ${f.due})` : ""}`
+    : `created in TickTick (id ${d.id}) but couldn't confirm on read-back — say so, don't overclaim`;
+  auditWrite("ticktick", "create_task", { targetRef: d.id, requested: { title: f.title.slice(0, 200), due: f.due, priority: f.priority, project: f.project || f.projectId }, verified, detail });
+  return { ok: true, id: d.id, verified, detail };
 }

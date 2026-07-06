@@ -3,6 +3,7 @@
 // the OAuth `state` param — so no extra redirect URI to register for the 2nd account.
 import { ownerUserId, getIntegration, saveIntegration } from "./tokens";
 import { db } from "../db";
+import { auditWrite } from "../audit";
 
 const AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -193,8 +194,18 @@ export async function gmailSend(to: string, subject: string, body: string): Prom
     body: JSON.stringify({ raw: buildRaw(to, subject, body) }),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
-  return { ok: true, detail: `✅ sent to ${to} — "${subject}"` };
+  if (!res.ok) {
+    const detail = JSON.stringify(d).slice(0, 150);
+    auditWrite("gmail", "send_email", { requested: { to, subject: subject.slice(0, 200) }, verified: false, detail });
+    return { ok: false, detail };
+  }
+  // cheap read-back: GET the sent message by the id gmail returned
+  const check = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${d.id}?format=minimal`, {
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  const detail = `✅ sent to ${to} — "${subject}"`;
+  auditWrite("gmail", "send_email", { targetRef: d.id, requested: { to, subject: subject.slice(0, 200) }, verified: check.ok, detail });
+  return { ok: true, detail };
 }
 
 export async function gmailDraft(to: string, subject: string, body: string): Promise<{ ok: boolean; detail: string }> {
@@ -206,8 +217,18 @@ export async function gmailDraft(to: string, subject: string, body: string): Pro
     body: JSON.stringify({ message: { raw: buildRaw(to, subject, body) } }),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
-  return { ok: true, detail: `draft saved for ${to} — "${subject}"` };
+  if (!res.ok) {
+    const detail = JSON.stringify(d).slice(0, 150);
+    auditWrite("gmail", "create_draft", { requested: { to, subject: subject.slice(0, 200) }, verified: false, detail });
+    return { ok: false, detail };
+  }
+  // cheap read-back: GET the draft by the id gmail returned
+  const check = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${d.id}`, {
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  const detail = `draft saved for ${to} — "${subject}"`;
+  auditWrite("gmail", "create_draft", { targetRef: d.id, requested: { to, subject: subject.slice(0, 200) }, verified: check.ok, detail });
+  return { ok: true, detail };
 }
 
 export async function calendarUpcoming(max = 10): Promise<{ ok: boolean; detail: string; events?: any[] }> {
@@ -245,11 +266,17 @@ export async function calendarCreate(f: {
     body: JSON.stringify({ summary: f.title, location: f.location, start: { dateTime: f.start }, end: { dateTime: end } }),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
+  if (!res.ok) {
+    const detail = JSON.stringify(d).slice(0, 150);
+    auditWrite("gcal", "create_event", { requested: { title: f.title, start: f.start, end, location: f.location }, verified: false, detail });
+    return { ok: false, detail };
+  }
   const check = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${d.id}`, {
     headers: { Authorization: `Bearer ${t}` },
   });
-  return { ok: true, verified: check.ok, detail: check.ok ? `created & verified: "${d.summary}"` : "created but unverified" };
+  const detail = check.ok ? `created & verified: "${d.summary}"` : "created but unverified";
+  auditWrite("gcal", "create_event", { targetRef: d.id, requested: { title: f.title, start: f.start, end, location: f.location }, verified: check.ok, detail });
+  return { ok: true, verified: check.ok, detail };
 }
 
 // reschedule / rename / move a calendar event (get id from calendarUpcoming)
@@ -270,8 +297,18 @@ export async function calendarUpdate(
     body: JSON.stringify(patch),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
-  return { ok: true, detail: `updated "${d.summary}"${f.start ? ` → ${f.start}` : ""}` };
+  if (!res.ok) {
+    const detail = JSON.stringify(d).slice(0, 150);
+    auditWrite("gcal", "update_event", { targetRef: eventId, requested: f, verified: false, detail });
+    return { ok: false, detail };
+  }
+  // cheap read-back: confirm the event still reads back after the patch
+  const check = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  const detail = `updated "${d.summary}"${f.start ? ` → ${f.start}` : ""}`;
+  auditWrite("gcal", "update_event", { targetRef: eventId, requested: f, verified: check.ok, detail });
+  return { ok: true, detail };
 }
 
 export async function calendarDelete(eventId: string): Promise<{ ok: boolean; detail: string }> {
@@ -281,5 +318,17 @@ export async function calendarDelete(eventId: string): Promise<{ ok: boolean; de
     method: "DELETE",
     headers: { Authorization: `Bearer ${t}` },
   });
-  return { ok: res.ok || res.status === 204, detail: res.ok || res.status === 204 ? `deleted event ${eventId}` : `delete failed: ${res.status}` };
+  const ok = res.ok || res.status === 204;
+  const detail = ok ? `deleted event ${eventId}` : `delete failed: ${res.status}`;
+  // cheap read-back: deleted events read back as cancelled (or 404/410)
+  let verified = false;
+  if (ok) {
+    const check = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+      headers: { Authorization: `Bearer ${t}` },
+    });
+    const cd = check.ok ? await check.json().catch(() => null) : null;
+    verified = check.status === 404 || check.status === 410 || cd?.status === "cancelled";
+  }
+  auditWrite("gcal", "delete_event", { targetRef: eventId, requested: { eventId }, verified, detail });
+  return { ok, detail };
 }
