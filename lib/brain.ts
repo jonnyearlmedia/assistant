@@ -6,7 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "./persona";
 import { TOOLS, dispatch } from "./tools";
 import { User } from "./db";
-import { fetchMedia } from "./linq";
+import { fetchMedia, fetchTextAttachment } from "./linq";
 import * as mem from "./memory";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -44,24 +44,21 @@ export async function think(
     content: m.body || "",
   }));
 
-  // current inbound — attach real images for vision (food pics, screenshots, etc.)
+  // current inbound — pull in attachments: images for vision, text/markdown files for ingestion
   let userContent: any = incomingText;
   if (media.length > 0) {
-    const imgs = ((await Promise.all(media.map((u) => fetchMedia(u)))).filter(Boolean) as {
-      mediaType: string;
-      data: string;
-    }[]);
-    if (imgs.length > 0) {
-      userContent = [
-        ...(incomingText ? [{ type: "text", text: incomingText }] : []),
-        ...imgs.map((im) => ({
-          type: "image",
-          source: { type: "base64", media_type: im.mediaType, data: im.data },
-        })),
-      ];
-    } else if (!incomingText) {
-      userContent = "[sent an attachment i couldn't open — ask him what it was]";
+    const blocks: any[] = incomingText ? [{ type: "text", text: incomingText }] : [];
+    for (const u of media) {
+      const img = await fetchMedia(u);
+      if (img) {
+        blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+        continue;
+      }
+      const file = await fetchTextAttachment(u);
+      if (file) blocks.push({ type: "text", text: `[attached file — its full contents follow]\n\n${file.text}` });
     }
+    if (blocks.length > 0) userContent = blocks;
+    else if (!incomingText) userContent = "[sent an attachment i couldn't open — ask him what it was]";
   }
   messages.push({ role: "user", content: userContent });
 

@@ -119,6 +119,24 @@ export function verifyLinq(rawBody: string, headers: Headers): { ok: boolean; re
   }
 }
 
+/** Fetch a text/markdown/csv/json attachment and return its contents (so she can ingest .md files). */
+export async function fetchTextAttachment(url: string): Promise<{ text: string } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: process.env.LINQ_API_KEY ? { Authorization: `Bearer ${process.env.LINQ_API_KEY}` } : {},
+    });
+    if (!res.ok) return null;
+    const ct = (res.headers.get("content-type") || "").split(";")[0].trim();
+    const textual = /^text\/|json|markdown|csv|xml|yaml|x-yaml|javascript/.test(ct) || /\.(md|txt|csv|json|ya?ml|xml)$/i.test(url);
+    if (!textual) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 300_000) return null;
+    return { text: buf.toString("utf-8").slice(0, 60000) };
+  } catch {
+    return null;
+  }
+}
+
 /** Normalize a Linq inbound webhook payload into a simple shape lexa's brain consumes. */
 export interface InboundMessage {
   from: string;
