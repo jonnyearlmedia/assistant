@@ -124,6 +124,22 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { scope: { type: "string", description: "today | week | all" } } },
   },
   {
+    name: "notion_search",
+    description:
+      "Search ALL of jonny's Notion — any page or database (not just Master Planner). Use for 'find my X page', 'what's in my Y', 'search my notion'. Returns titles + ids + type. If it returns nothing, that page just isn't shared with the integration yet — tell him to share it (••• → Connections → text-assistant).",
+    input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "notion_read",
+    description: "Read the actual content of a Notion page by id (get the id from notion_search first).",
+    input_schema: { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
+  },
+  {
+    name: "notion_query_db",
+    description: "Query any Notion database by id (get the id from notion_search). Returns the rows with their properties.",
+    input_schema: { type: "object", properties: { database_id: { type: "string" } }, required: ["database_id"] },
+  },
+  {
     name: "notion_log",
     description:
       "Write to Notion. target='master_planner' creates a task in the MASTER PLANNER db — fields: {task (required), due (ISO date), status, priority, project, type, category, firmness, critical (bool), focus (bool), tags (string[])}. target='health_mood' is the mood tracker (strict format — only if you have the playbook). VERIFIED read-back after write; report verified:false honestly, never fake it.",
@@ -235,6 +251,15 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "ticktick_list":
         if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
         return JSON.stringify(await ticktick.listTasks(input.scope || "all"));
+      case "notion_search":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.search(input.query, 8));
+      case "notion_read":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.readPage(input.page_id));
+      case "notion_query_db":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.queryDatabase(input.database_id));
       case "notion_log": {
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         const f = input.fields || {};
