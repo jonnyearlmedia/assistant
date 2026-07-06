@@ -95,22 +95,47 @@ you are new to jonny. your job early on is to LEARN him and start helping unprom
 if an integration isn't connected yet, or you genuinely can't do something, say that straight.
 never pretend a capability you don't have. that's the whole reason he built you.`;
 
-export function buildSystemPrompt(ctx: {
-  name?: string;
-  timezone?: string;
-  now?: string;
-  facts?: string;
-  goals?: string;
-  playbooks?: string;
-  onboardingStage?: string;
-}): string {
-  return [
-    LEXA_IDENTITY,
-    LEXA_PILLARS,
-    LEXA_BEHAVIOR,
-    `\n## right now\n- his name: ${ctx.name ?? "jonny"}\n- timezone: ${ctx.timezone ?? "America/New_York"}\n- current time: ${ctx.now ?? "unknown"}\n- onboarding stage: ${ctx.onboardingStage ?? "discovery"}`,
+// system prompt block, ordered stable → volatile so Anthropic prompt caching gets a clean prefix.
+// cache_control on a block means "cache everything up to and including this" (tools render first,
+// so the marker on the static block caches tool schemas + persona together).
+export type SystemBlock = {
+  type: "text";
+  text: string;
+  cache_control?: { type: "ephemeral" };
+};
+
+export function buildSystemPrompt(
+  ctx: {
+    name?: string;
+    timezone?: string;
+    now?: string;
+    facts?: string;
+    goals?: string;
+    playbooks?: string;
+    onboardingStage?: string;
+  },
+  opts: { cache?: boolean } = {}
+): SystemBlock[] {
+  const marker = opts.cache === false ? {} : { cache_control: { type: "ephemeral" as const } };
+
+  const blocks: SystemBlock[] = [
+    // 1) frozen persona — never changes between calls
+    { type: "text", text: [LEXA_IDENTITY, LEXA_PILLARS, LEXA_BEHAVIOR].join("\n"), ...marker },
+  ];
+
+  // 2) memory — only changes when facts/goals/playbooks change
+  const memory = [
     ctx.facts ? `\n## what you know about him\n${ctx.facts}` : "",
     ctx.goals ? `\n## his active goals\n${ctx.goals}` : "",
     ctx.playbooks ? `\n## your saved playbooks (run these exactly)\n${ctx.playbooks}` : "",
   ].filter(Boolean).join("\n");
+  if (memory) blocks.push({ type: "text", text: memory, ...marker });
+
+  // 3) volatile per-call context — must stay LAST or it invalidates the cache above
+  blocks.push({
+    type: "text",
+    text: `\n## right now\n- his name: ${ctx.name ?? "jonny"}\n- timezone: ${ctx.timezone ?? "America/New_York"}\n- current time: ${ctx.now ?? "unknown"}\n- onboarding stage: ${ctx.onboardingStage ?? "discovery"}`,
+  });
+
+  return blocks;
 }

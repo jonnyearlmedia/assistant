@@ -13,6 +13,42 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.LEXA_MODEL || "claude-sonnet-5";
 const MAX_TOOL_TURNS = 8;
 
+// request-time copy of messages with a cache breakpoint on the very last content block,
+// so each call in the tool loop reuses everything before it (system + tools + prior turns).
+// never mutates the working array — markers must not accumulate across loop iterations
+// (the API allows max 4 breakpoints per request).
+function withCacheMarker(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  if (messages.length === 0) return messages;
+  const out = messages.slice();
+  const last = out[out.length - 1];
+  const blocks: any[] =
+    typeof last.content === "string"
+      ? last.content
+        ? [{ type: "text", text: last.content }]
+        : []
+      : (last.content as any[]).slice();
+  if (blocks.length === 0) return messages;
+  const tail = blocks[blocks.length - 1];
+  blocks[blocks.length - 1] = { ...tail, cache_control: { type: "ephemeral" } };
+  out[out.length - 1] = { ...last, content: blocks };
+  return out;
+}
+
+// one line per API call in the Vercel logs — proves cache hits, and is the seed of spend tracking
+function logUsage(fn: string, turn: number, u: Anthropic.Usage) {
+  console.log(
+    "[lexa] usage",
+    JSON.stringify({
+      fn,
+      turn,
+      input: u.input_tokens,
+      cache_read: u.cache_read_input_tokens ?? 0,
+      cache_write: u.cache_creation_input_tokens ?? 0,
+      output: u.output_tokens,
+    })
+  );
+}
+
 export async function think(
   user: User,
   incomingText: string,
@@ -69,8 +105,9 @@ export async function think(
       max_tokens: 1024,
       system,
       tools: TOOLS,
-      messages,
+      messages: withCacheMarker(messages),
     });
+    logUsage("think", turn, res.usage);
 
     // collect any text she emitted
     const text = res.content
@@ -112,15 +149,20 @@ export async function composeProactive(
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
   ]);
-  const system = buildSystemPrompt({
-    name: user.name ?? undefined,
-    timezone: user.timezone,
-    now: new Date().toLocaleString("en-US", { timeZone: user.timezone }),
-    onboardingStage: user.onboarding_stage,
-    facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
-    goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
-    playbooks: playbooks.map((p) => `- ${p.name}: ${p.instructions}`).join("\n"),
-  });
+  // no tools on this call → different prompt prefix than think(), so it can't share that
+  // cache anyway; proactive fires a handful of times a day, not worth its own cache writes.
+  const system = buildSystemPrompt(
+    {
+      name: user.name ?? undefined,
+      timezone: user.timezone,
+      now: new Date().toLocaleString("en-US", { timeZone: user.timezone }),
+      onboardingStage: user.onboarding_stage,
+      facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
+      goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
+      playbooks: playbooks.map((p) => `- ${p.name}: ${p.instructions}`).join("\n"),
+    },
+    { cache: false }
+  );
   const prompt = `you're reaching out to ${user.name ?? "jonny"} FIRST, unprompted — he did not just text you.
 SITUATION: ${situation}
 ${context ? `\nRELEVANT DATA:\n${context}\n` : ""}
@@ -132,6 +174,7 @@ write exactly what you'd text him right now. keep it short + natural, real bubbl
     system,
     messages: [{ role: "user", content: prompt }],
   });
+  logUsage("proactive", 0, res.usage);
   return res.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
