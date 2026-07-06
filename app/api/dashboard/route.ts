@@ -6,12 +6,31 @@ import { db } from "@/lib/db";
 import { ownerUserId } from "@/lib/integrations/tokens";
 import { TOOLS } from "@/lib/tools";
 import * as ticktick from "@/lib/integrations/ticktick";
+import { organizeDump } from "@/lib/organize";
+import { loadDashboard } from "@/lib/dashboard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// live data for the client UI to refetch after edits (no full page reload).
+export async function GET() {
+  const data = await loadDashboard();
+  return NextResponse.json(data ?? {});
+}
+
 const VALID_TOOLS = new Set((TOOLS as any[]).map((t) => t?.name).filter(Boolean));
 VALID_TOOLS.add("web_search");
+
+// plain-english abilities → the real tools behind them (so the builder never shows tool names)
+const CAPS: Record<string, string[]> = {
+  email: ["gmail_search", "gmail_send", "gmail_draft"],
+  calendar: ["gcal_upcoming", "gcal_create", "gcal_update", "gcal_delete", "drive_time"],
+  notion: ["notion_search", "notion_read", "notion_query_db", "notion_create_page", "notion_append", "notion_log", "list_master_planner"],
+  todos: ["ticktick_list", "ticktick_create_task", "ticktick_projects", "ticktick_complete", "ticktick_update", "ticktick_delete"],
+  web: ["web_search"],
+  memory: ["recall", "list_facts", "remember_fact"],
+  files: ["drive_search", "drive_read"],
+};
 
 const asArray = (v: any): string[] => (Array.isArray(v) ? v : v == null || v === "" ? [] : [v]);
 const now = () => new Date().toISOString();
@@ -43,10 +62,11 @@ export async function POST(req: NextRequest) {
 
       // ---- facts (memories) ----
       case "add_fact": {
-        const { category, key, value } = body;
-        if (!key || !value) return NextResponse.json({ error: "key+value required" }, { status: 400 });
+        const { category, value } = body;
+        if (!value) return NextResponse.json({ error: "type what she should remember" }, { status: 400 });
+        const key = String(body.key || value).trim().slice(0, 60); // auto key from the value if none given
         await db.from("facts").upsert(
-          { user_id: uid, category: (category || "general").trim(), key: key.trim(), value, source: "dashboard", updated_at: now() },
+          { user_id: uid, category: (category || "general").trim().toLowerCase() || "general", key, value, source: "dashboard", updated_at: now() },
           { onConflict: "user_id,category,key" }
         );
         return NextResponse.json({ ok: true });
@@ -110,9 +130,13 @@ export async function POST(req: NextRequest) {
       // ---- subagents (visual builder) ----
       case "save_subagent": {
         const name = String(body.name || "").trim().toLowerCase().replace(/\s+/g, "_");
-        if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
-        const tools = asArray(body.tools).filter((t) => VALID_TOOLS.has(t));
-        if (!tools.length) return NextResponse.json({ error: "pick at least one valid tool" }, { status: 400 });
+        if (!name) return NextResponse.json({ error: "give your helper a name" }, { status: 400 });
+        // abilities (plain english) expand to real tools; raw tool names still accepted for safety
+        let tools: string[] = [];
+        for (const c of asArray(body.caps)) if (CAPS[c]) tools.push(...CAPS[c]);
+        tools.push(...asArray(body.tools).filter((t) => VALID_TOOLS.has(t)));
+        tools = [...new Set(tools)];
+        if (!tools.length) return NextResponse.json({ error: "pick at least one ability for your helper" }, { status: 400 });
         await db.from("subagents").upsert(
           { user_id: uid, name, brief: body.brief || "", tools, active: true, updated_at: now() },
           { onConflict: "user_id,name" }
@@ -131,6 +155,10 @@ export async function POST(req: NextRequest) {
         const r = await ticktick.createTask({ title: body.title, due: body.due || undefined, project: body.project || undefined });
         return NextResponse.json({ ok: r.ok, detail: r.detail });
       }
+
+      // ---- "just dump it": free text → auto-sorted into the right places ----
+      case "organize":
+        return NextResponse.json(await organizeDump(uid, String(body.text || "")));
 
       // ---- custom instructions (jonny's own standing rules, folded into her brain) ----
       case "set_instructions": {
