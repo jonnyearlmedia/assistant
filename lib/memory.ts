@@ -218,6 +218,31 @@ export async function recentMessages(userId: string, limit = 20, beforeIso?: str
   return (data ?? []).reverse();
 }
 
+// memory_query: search jonny's FULL history (not just the recent ~20-msg window) + his facts,
+// for when he references something older than what's already in context. substring match — simple,
+// but enough to surface "what did i say about X" / "that thing from last week".
+export async function searchMemory(userId: string, query: string, limit = 8) {
+  const q = (query || "").trim();
+  if (!q) return { messages: [], facts: [] };
+  const like = `%${q}%`;
+  const [msgs, fcts] = await Promise.all([
+    db
+      .from("messages")
+      .select("direction,body,created_at")
+      .eq("user_id", userId)
+      .ilike("body", like)
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    db
+      .from("facts")
+      .select("category,key,value,updated_at")
+      .eq("user_id", userId)
+      .or(`key.ilike.${like},value.ilike.${like}`)
+      .limit(limit),
+  ]);
+  return { messages: (msgs.data ?? []).reverse(), facts: fcts.data ?? [] };
+}
+
 export async function logMessage(
   userId: string | null,
   direction: "inbound" | "outbound",

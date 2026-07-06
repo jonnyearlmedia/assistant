@@ -10,6 +10,7 @@ import * as maps from "./integrations/maps";
 import * as ticktick from "./integrations/ticktick";
 import * as google from "./integrations/google";
 import * as spend from "./spend";
+import * as sub from "./subagents";
 
 export const TOOLS: Anthropic.Tool[] = [
   {
@@ -315,6 +316,29 @@ export const TOOLS: Anthropic.Tool[] = [
       properties: { period: { type: "string", description: "today | week | month | all" } },
     },
   },
+  {
+    name: "recall",
+    description:
+      "Search jonny's FULL history — past messages + saved facts — for something OLDER than the recent conversation you can already see. Use whenever he references a past chat, detail, or decision ('what did i say about X', 'that place i mentioned', 'the thing from last week') and it's not in your recent context. Returns matching past messages + facts with dates. Recall before ever claiming you don't remember.",
+    input_schema: {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "delegate",
+    description:
+      "Spin up a specialist SUBAGENT to handle a focused sub-task, so you stay lean and can run areas independently. domain: email | calendar | notion | tasks | research | memory. task: a clear, COMPLETE instruction (the specialist can't see this chat — hand it everything it needs). It runs with ONLY that domain's tools, verifies its own writes, and returns a short result. research = web lookup (current facts/news/prices/hours). Delegate several in one turn for independent work (e.g. check email AND scan the calendar); or just use your own tools directly for something simple/one-step.",
+    input_schema: {
+      type: "object",
+      properties: {
+        domain: { type: "string", description: "email | calendar | notion | tasks | research | memory" },
+        task: { type: "string", description: "complete standalone instruction for the specialist" },
+      },
+      required: ["domain", "task"],
+    },
+  },
 ];
 
 async function integrationConnected(userId: string, provider: string): Promise<boolean> {
@@ -489,6 +513,10 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(await mem.resolveCommitment(u, input.id, input.status, input.outcome));
       case "spend_report":
         return JSON.stringify(await spend.computeSpend(spend.periodSince(input.period || "week")));
+      case "recall":
+        return JSON.stringify(await mem.searchMemory(u, input.query, input.limit || 8));
+      case "delegate":
+        return await sub.runSubagent(u, input.domain, input.task);
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;

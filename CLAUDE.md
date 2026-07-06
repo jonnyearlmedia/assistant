@@ -56,6 +56,8 @@ lib/
   triage.ts       quickTriage() — cheap Haiku front-door: pure chatter → fast direct reply,
                   everything substantive (or any media) falls through to think() unchanged
   spend.ts        computeSpend() — dollarizes usage_log tokens (per-model rates) for the spend_report tool
+  subagents.ts    runSubagent() — specialist fleet (email/calendar/notion/tasks/research/memory); the
+                  main brain's `delegate` tool spins one up with only that domain's tools + a tight brief
   tools.ts        ALL tool definitions + dispatch() switch  ← add new capabilities here
   memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, commitments, places, message log, debounce)
   db.ts           lazy Supabase client + resolveUser + User type
