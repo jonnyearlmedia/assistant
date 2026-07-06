@@ -149,6 +149,68 @@ export async function queryDatabase(dbId: string, max = 15): Promise<{ ok: boole
   return { ok: true, rows, detail: `${rows.length} row(s)` };
 }
 
+// create a page (row) in ANY notion database — maps a simple {field: value} object to the db's
+// real property types by reading its schema first. this is how health_mood logging works.
+export async function createPageInDb(
+  dbId: string,
+  fields: Record<string, any>
+): Promise<{ ok: boolean; id?: string; verified?: boolean; detail: string }> {
+  if (!process.env.NOTION_TOKEN) return { ok: false, verified: false, detail: "NOTION_TOKEN not set" };
+  const dbRes = await fetch(`${NOTION}/databases/${dbId}`, { headers: headers() });
+  if (!dbRes.ok) return { ok: false, verified: false, detail: `db not found (${dbRes.status})` };
+  const db = await dbRes.json();
+  const schema = db.properties || {};
+  const props: any = {};
+  const skipped: string[] = [];
+  for (const [name, val] of Object.entries(fields)) {
+    const p = schema[name];
+    if (!p) { skipped.push(name); continue; }
+    switch (p.type) {
+      case "title": props[name] = { title: [{ text: { content: String(val) } }] }; break;
+      case "rich_text": props[name] = { rich_text: [{ text: { content: String(val) } }] }; break;
+      case "select": props[name] = { select: { name: String(val) } }; break;
+      case "status": props[name] = { status: { name: String(val) } }; break;
+      case "multi_select": props[name] = { multi_select: (Array.isArray(val) ? val : [val]).map((v) => ({ name: String(v) })) }; break;
+      case "date": props[name] = { date: { start: String(val) } }; break;
+      case "number": props[name] = { number: Number(val) }; break;
+      case "checkbox": props[name] = { checkbox: Boolean(val) }; break;
+      default: skipped.push(name);
+    }
+  }
+  const res = await fetch(`${NOTION}/pages`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ parent: { database_id: dbId }, properties: props }),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, verified: false, detail: `notion create failed: ${d?.message || res.status}` };
+  const check = await fetch(`${NOTION}/pages/${d.id}`, { headers: headers() });
+  return {
+    ok: true,
+    id: d.id,
+    verified: check.ok,
+    detail: `created & ${check.ok ? "verified" : "UNVERIFIED"} row in db${skipped.length ? ` (ignored unknown fields: ${skipped.join(", ")})` : ""}`,
+  };
+}
+
+// append text content to any notion page
+export async function appendText(pageId: string, text: string): Promise<{ ok: boolean; detail: string }> {
+  if (!process.env.NOTION_TOKEN) return { ok: false, detail: "NOTION_TOKEN not set" };
+  const children = (text || "")
+    .split("\n")
+    .filter((l) => l.trim())
+    .slice(0, 90)
+    .map((line) => ({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: line.slice(0, 1900) } }] } }));
+  const res = await fetch(`${NOTION}/blocks/${pageId}/children`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ children }),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: `append failed: ${d?.message || res.status}` };
+  return { ok: true, detail: `appended ${children.length} block(s)` };
+}
+
 export async function listMasterPlanner(limit = 12): Promise<{ ok: boolean; tasks?: any[]; detail?: string }> {
   if (!process.env.NOTION_TOKEN) return { ok: false, detail: "NOTION_TOKEN not set" };
   const res = await fetch(`${NOTION}/databases/${MASTER_PLANNER_DB}/query`, {

@@ -164,6 +164,21 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { database_id: { type: "string" } }, required: ["database_id"] },
   },
   {
+    name: "notion_create_page",
+    description:
+      "Create a page/row in ANY Notion database (e.g. log a mood entry in health_mood). fields is a {property_name: value} map — it's auto-mapped to the db's real property types. Query the db first (notion_query_db / notion_search) to learn the exact property names. Verified read-back.",
+    input_schema: {
+      type: "object",
+      properties: { database_id: { type: "string" }, fields: { type: "object" } },
+      required: ["database_id", "fields"],
+    },
+  },
+  {
+    name: "notion_append",
+    description: "Append text content to any Notion page by id (each line becomes a paragraph). Use for journaling/notes into an existing page.",
+    input_schema: { type: "object", properties: { page_id: { type: "string" }, text: { type: "string" } }, required: ["page_id", "text"] },
+  },
+  {
     name: "notion_log",
     description:
       "Write to Notion. target='master_planner' creates a task in the MASTER PLANNER db — fields: {task (required), due (ISO date), status, priority, project, type, category, firmness, critical (bool), focus (bool), tags (string[])}. target='health_mood' is the mood tracker (strict format — only if you have the playbook). VERIFIED read-back after write; report verified:false honestly, never fake it.",
@@ -207,6 +222,20 @@ export const TOOLS: Anthropic.Tool[] = [
       properties: { title: { type: "string" }, start: { type: "string" }, end: { type: "string" }, location: { type: "string" } },
       required: ["title", "start"],
     },
+  },
+  {
+    name: "gcal_update",
+    description: "Reschedule/rename/move a Google Calendar event by id (get id from gcal_upcoming). start/end ISO8601.",
+    input_schema: {
+      type: "object",
+      properties: { event_id: { type: "string" }, title: { type: "string" }, start: { type: "string" }, end: { type: "string" }, location: { type: "string" } },
+      required: ["event_id"],
+    },
+  },
+  {
+    name: "gcal_delete",
+    description: "Delete a Google Calendar event by id (get id from gcal_upcoming).",
+    input_schema: { type: "object", properties: { event_id: { type: "string" } }, required: ["event_id"] },
   },
   {
     name: "drive_search",
@@ -320,6 +349,12 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "notion_query_db":
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         return JSON.stringify(await notion.queryDatabase(input.database_id));
+      case "notion_create_page":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.createPageInDb(input.database_id, input.fields || {}));
+      case "notion_append":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.appendText(input.page_id, input.text));
       case "notion_log": {
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         const f = input.fields || {};
@@ -341,7 +376,7 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
           );
         }
         if (input.target === "health_mood") {
-          return "health_mood format isn't mapped yet — ask jonny for the exact fields + options ONCE, save it as a playbook, then log. do NOT guess the format or fake the entry.";
+          return "for health_mood: notion_search it → notion_query_db to see its exact property names/options → then notion_create_page with those fields (follow jonny's saved format playbook if one exists). don't guess property names.";
         }
         return `notion target '${input.target}' not wired yet.`;
       }
@@ -365,6 +400,14 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(
           await google.calendarCreate({ title: input.title, start: input.start, end: input.end, location: input.location })
         );
+      case "gcal_update":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Calendar");
+        return JSON.stringify(
+          await google.calendarUpdate(input.event_id, { title: input.title, start: input.start, end: input.end, location: input.location })
+        );
+      case "gcal_delete":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Calendar");
+        return JSON.stringify(await google.calendarDelete(input.event_id));
       case "drive_search":
         if (!(await google.googleConnected())) return NOT_CONNECTED("Google Drive");
         return JSON.stringify(await google.driveSearch(input.query, 6));

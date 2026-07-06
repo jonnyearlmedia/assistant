@@ -221,8 +221,10 @@ export async function calendarUpcoming(max = 10): Promise<{ ok: boolean; detail:
   const d = await res.json();
   if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
   const events = (d.items || []).map((e: any) => ({
+    id: e.id,
     title: e.summary,
     start: e.start?.dateTime || e.start?.date,
+    end: e.end?.dateTime || e.end?.date,
     location: e.location,
   }));
   return { ok: true, detail: `${events.length} upcoming`, events };
@@ -248,4 +250,36 @@ export async function calendarCreate(f: {
     headers: { Authorization: `Bearer ${t}` },
   });
   return { ok: true, verified: check.ok, detail: check.ok ? `created & verified: "${d.summary}"` : "created but unverified" };
+}
+
+// reschedule / rename / move a calendar event (get id from calendarUpcoming)
+export async function calendarUpdate(
+  eventId: string,
+  f: { title?: string; start?: string; end?: string; location?: string }
+): Promise<{ ok: boolean; detail: string }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const patch: any = {};
+  if (f.title !== undefined) patch.summary = f.title;
+  if (f.location !== undefined) patch.location = f.location;
+  if (f.start) patch.start = { dateTime: f.start };
+  if (f.end) patch.end = { dateTime: f.end };
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
+  return { ok: true, detail: `updated "${d.summary}"${f.start ? ` → ${f.start}` : ""}` };
+}
+
+export async function calendarDelete(eventId: string): Promise<{ ok: boolean; detail: string }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  return { ok: res.ok || res.status === 204, detail: res.ok || res.status === 204 ? `deleted event ${eventId}` : `delete failed: ${res.status}` };
 }
