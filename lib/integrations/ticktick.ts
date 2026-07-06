@@ -88,7 +88,12 @@ export async function listTasks(
           id: task.id,
           projectId: p.id,
           title: task.title,
+          // time-block tasks have BOTH: start is when it begins, due is when it ends.
+          // dropping start made lexa report blocks by their end time ("workout at 6:45"
+          // for a 5:15–6:45 block). keep both so she reads the schedule like a human.
+          start: task.startDate && task.startDate !== task.dueDate ? task.startDate : null,
           due: task.dueDate || task.startDate || null,
+          isAllDay: task.isAllDay ?? false,
           priority: task.priority ?? 0,
           project: p.name,
           status: task.status === 2 ? "done" : "active",

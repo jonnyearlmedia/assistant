@@ -97,7 +97,15 @@ export async function runDailyBrief(force = false): Promise<number> {
       const tt: any = await ticktick.listTasks("today");
       if (tt.ok) {
         if (tt.dated?.length)
-          ctx += "TODAY (TickTick):\n" + tt.dated.map((x: any) => `- ${x.title} @ ${x.due} (${x.project})`).join("\n") + "\n";
+          ctx +=
+            "TODAY (TickTick — for time blocks, 'from X' is when it STARTS, 'until' is when it ends):\n" +
+            tt.dated
+              .map((x: any) =>
+                x.start
+                  ? `- ${x.title} from ${x.start} until ${x.due} (${x.project})`
+                  : `- ${x.title}${x.isAllDay ? " (all day)" : ` @ ${x.due}`} (${x.project})`
+              )
+              .join("\n") + "\n";
         if (tt.overdue?.length)
           ctx += `\nOVERDUE (${tt.counts.overdue}):\n` + tt.overdue.slice(0, 6).map((x: any) => `- ${x.title} (was due ${x.due})`).join("\n") + "\n";
         if (tt.counts?.undated)
