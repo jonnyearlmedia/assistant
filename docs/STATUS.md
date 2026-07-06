@@ -112,8 +112,9 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
    THEN. Writes only after he okays (persona rule: ticktick_update due dates / gcal_create blocks,
    verified). On demand: `?force=planning`. Backlog reads via `buildBacklogContext`.
 7. **Vision workflows** — food pic → macros into Notion; screenshot → extract event/task → set it.
-8. **Tone tuning** — jonny wasn't sold on heavy gen-z. Options offered: clean&natural / warm&hype /
-   dry&minimal / sharp-no-BS coach. Awaiting his pick; then retune `lib/persona.ts`.
+8. ~~**Tone tuning**~~ — ✅ DONE. jonny picked **warm & hype**. `LEXA_IDENTITY` voice retuned: warm,
+   encouraging, celebrates real wins, light emoji — but NOT try-hard gen-z slang (he disliked that),
+   and warm ≠ pushover (backbone preserved). Easy to nudge further (less emoji / more/less hype).
 9. Voice notes, group chats, Calendly/Box — as desired.
 
 ## Security follow-ups
