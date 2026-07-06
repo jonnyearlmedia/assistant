@@ -271,6 +271,40 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["destination"],
     },
   },
+  {
+    name: "track_commitment",
+    description:
+      "When jonny says he'll do something later ('i'll hit the gym after work', 'gonna call mom tomorrow', 'i'll finish that tonight'), record it so you follow up and hold him accountable. what = the thing ('hit the gym'). follow_up_at = ISO8601, a bit AFTER when he said he'd do it, so you can check whether he actually did. context = the gist of what he said. Don't make a big deal of it in your reply — a quick 'bet' is enough.",
+    input_schema: {
+      type: "object",
+      properties: {
+        what: { type: "string" },
+        follow_up_at: { type: "string", description: "ISO8601, shortly after he said he'd do it" },
+        context: { type: "string" },
+      },
+      required: ["what", "follow_up_at"],
+    },
+  },
+  {
+    name: "list_commitments",
+    description:
+      "List jonny's open commitments (things he said he'd do that you're tracking, incl. ones you already nudged). Use to reference them, or to get an id before resolving one.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "resolve_commitment",
+    description:
+      "Close out a tracked commitment when jonny tells you what happened. status: kept (he did it), missed (he didn't), or cancelled (no longer relevant). Get the id from list_commitments. Resolve honestly — this is his real accountability record.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        status: { type: "string", description: "kept | missed | cancelled" },
+        outcome: { type: "string", description: "what actually happened" },
+      },
+      required: ["id", "status"],
+    },
+  },
 ];
 
 async function integrationConnected(userId: string, provider: string): Promise<boolean> {
@@ -435,6 +469,14 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(await mem.listPlaces(u));
       case "set_current_location":
         return JSON.stringify(await mem.setCurrentLocation(u, input.address));
+      case "track_commitment":
+        return JSON.stringify(
+          await mem.trackCommitment(u, { what: input.what, follow_up_at: input.follow_up_at, context: input.context })
+        );
+      case "list_commitments":
+        return JSON.stringify(await mem.listOpenCommitments(u));
+      case "resolve_commitment":
+        return JSON.stringify(await mem.resolveCommitment(u, input.id, input.status, input.outcome));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;

@@ -86,6 +86,23 @@ create table if not exists behavior_log (
   created_at   timestamptz not null default now()
 );
 
+-- commitment follow-through: lexa catches "i'll do X later", stores it, and follows up to hold
+-- jonny to it. his reply resolves it (kept/missed) — that outcome is his real accountability record.
+create table if not exists commitments (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references users(id) on delete cascade,
+  what          text not null,                     -- "hit the gym", "call mom"
+  context       text,                              -- what he said / why it matters
+  committed_at  timestamptz not null default now(),
+  follow_up_at  timestamptz not null,              -- when to check whether he did it
+  status        text not null default 'open',      -- open | nudged | kept | missed | cancelled
+  outcome       text,                              -- what happened on resolve
+  nudge_count   int not null default 0,
+  created_at    timestamptz not null default now()
+);
+create index if not exists idx_commitments_followup on commitments(status, follow_up_at);
+create index if not exists idx_commitments_user on commitments(user_id, status);
+
 -- full conversation history + delivery tracking (reliability, not a black box)
 create table if not exists messages (
   id              uuid primary key default gen_random_uuid(),

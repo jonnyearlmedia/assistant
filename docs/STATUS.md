@@ -100,7 +100,10 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
    cost rollups, warn jonny, optional monthly ceiling.
 3. **Behavioral adaptation (wire it up)** — use `behavior_log` to learn jonny's procrastination pattern
    and nudge earlier for tasks he tends to skip. Highest-value "for him" feature.
-4. **Commitment follow-through** — detect "I'll do X later" in chat, store it, follow up proactively.
+4. ~~**Commitment follow-through**~~ — ✅ DONE. lexa catches "i'll do X later" via the `track_commitment`
+   tool (persona-driven in `think()`), stores it in the `commitments` table, and `dispatchDueCommitments`
+   (in `runTick`) follows up when `follow_up_at` passes — one nudge, then marks 'nudged' (never nags again).
+   His reply resolves it kept/missed via `resolve_commitment`, logged to `behavior_log` (feeds #3 next).
 5. **Weekly review** — Sunday-night automation: what got done/slipped, plan the week from TickTick/Notion.
 6. **Time-block the backlog** — proactively propose dates/calendar blocks for his pile of undated TickTick tasks.
 7. **Vision workflows** — food pic → macros into Notion; screenshot → extract event/task → set it.

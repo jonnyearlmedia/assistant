@@ -134,6 +134,49 @@ export async function cancelReminder(userId: string, id: string) {
   return { cancelled: id };
 }
 
+// commitment follow-through: jonny says "i'll do X later" → lexa stores it and follows up.
+export async function trackCommitment(
+  userId: string,
+  c: { what: string; follow_up_at: string; context?: string }
+) {
+  const { data, error } = await db
+    .from("commitments")
+    .insert({ user_id: userId, what: c.what, follow_up_at: c.follow_up_at, context: c.context })
+    .select("id,what,follow_up_at,status")
+    .single();
+  if (error) throw new Error(`trackCommitment: ${error.message}`);
+  return data;
+}
+
+// open = not yet resolved (includes ones she's already nudged, so she can still resolve them)
+export async function listOpenCommitments(userId: string) {
+  const { data, error } = await db
+    .from("commitments")
+    .select("id,what,context,follow_up_at,status,nudge_count")
+    .eq("user_id", userId)
+    .in("status", ["open", "nudged"])
+    .order("follow_up_at");
+  if (error) throw new Error(`listOpenCommitments: ${error.message}`);
+  return data ?? [];
+}
+
+// resolve a commitment when jonny tells her he did / didn't do it (feeds his accountability record)
+export async function resolveCommitment(
+  userId: string,
+  id: string,
+  status: "kept" | "missed" | "cancelled",
+  outcome?: string
+) {
+  const { data, error } = await db
+    .from("commitments")
+    .update({ status, outcome })
+    .eq("user_id", userId)
+    .eq("id", id)
+    .select("id,what,status,outcome");
+  if (error) throw new Error(`resolveCommitment: ${error.message}`);
+  return { resolved: data?.length ?? 0, commitment: data?.[0] ?? null };
+}
+
 // named places (home, gym, work…) for drive-time + "leave now" reminders
 export async function savePlace(userId: string, name: string, address: string) {
   const { data, error } = await db
