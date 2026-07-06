@@ -56,7 +56,7 @@ lib/
   triage.ts       quickTriage() — cheap Haiku front-door: pure chatter → fast direct reply,
                   everything substantive (or any media) falls through to think() unchanged
   tools.ts        ALL tool definitions + dispatch() switch  ← add new capabilities here
-  memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, places, message log, debounce)
+  memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, commitments, places, message log, debounce)
   db.ts           lazy Supabase client + resolveUser + User type
   linq.ts         Linq transport: sendMessage, startTyping, markRead, verifyLinq, parseInbound, fetchMedia/TextAttachment
   send.ts         shared "text like a person" bubble sender (split + typing + human delay); durable:true
@@ -64,7 +64,7 @@ lib/
   queue.ts        durable job queue on the jobs table: atomic claim, retry w/ exponential backoff,
                   dead-letter, dedupe_key exactly-once, tick lease, stuck-job reaper, prune
   audit.ts        auditWrite() → write_audits ledger (fire-and-forget receipt for every external write)
-  proactive.ts    dispatchDueReminders, runDailyBrief, proactiveCheckin, runAutomations, JOB_HANDLERS, runTick
+  proactive.ts    dispatchDueReminders, dispatchDueCommitments, runDailyBrief, proactiveCheckin, runAutomations, JOB_HANDLERS, runTick
                   (once-a-day work goes through the queue with per-user-per-day dedupe keys)
   integrations/
     tokens.ts     owner resolution + OAuth token storage (integrations table)

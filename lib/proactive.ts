@@ -103,6 +103,36 @@ export async function dispatchDueReminders(): Promise<number> {
   return fired;
 }
 
+// 1b) follow up on due commitments — "yo did you end up doing X?". one nudge, then mark 'nudged'
+// so it never nags again; his reply resolves it (kept/missed) via the resolve_commitment tool.
+export async function dispatchDueCommitments(): Promise<number> {
+  const nowIso = new Date().toISOString();
+  const { data } = await db
+    .from("commitments")
+    .select("*")
+    .eq("status", "open")
+    .lte("follow_up_at", nowIso)
+    .order("follow_up_at");
+  let fired = 0;
+  for (const c of data || []) {
+    const user = await getUser(c.user_id);
+    if (!user) continue;
+    try {
+      const ctx = `he committed to: "${c.what}"${c.context ? ` (${c.context})` : ""}; he said this at ${c.committed_at}. check in like a friend who remembered — did he actually do it? hold him to it without nagging.`;
+      const text = await composeProactive(user, "a thing jonny said he'd do is due for a follow-up — see if he did it", ctx);
+      const res = await sendBubbles(user.id, user.phone, (user as any).linq_chat_id, text);
+      if (res.sent === 0) throw new Error("all bubbles failed to send");
+      // mark 'nudged' (won't re-fire); his reply resolves it kept/missed. row stays open on failure.
+      await db.from("commitments").update({ status: "nudged", nudge_count: (c.nudge_count || 0) + 1 }).eq("id", c.id);
+      await mem.logBehavior(user.id, "nudged", { ref: c.id, scheduled_at: c.follow_up_at, acted_at: nowIso, meta: { kind: "commitment" } });
+      fired++;
+    } catch (e: any) {
+      console.error("[lexa] commitment follow-up failed, staying open for next tick:", e?.message || e);
+    }
+  }
+  return fired;
+}
+
 // gather the brief's context (TickTick + Notion + Calendar + unread email). best-effort per source.
 async function buildBriefContext(): Promise<string> {
   let ctx = "";
@@ -310,6 +340,7 @@ export async function runTick() {
   } catch {}
   for (const [name, fn] of [
     ["reminders", dispatchDueReminders],
+    ["commitments", dispatchDueCommitments],
     ["brief", runDailyBrief],
     ["checkin", proactiveCheckin],
     ["automations", runAutomations],
