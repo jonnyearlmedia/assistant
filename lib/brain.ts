@@ -58,10 +58,11 @@ export async function think(
   opts: { historyBefore?: string } = {}
 ): Promise<string> {
   // load memory into context
-  const [facts, goals, playbooks, history] = await Promise.all([
+  const [facts, goals, playbooks, subagents, history] = await Promise.all([
     mem.listFacts(user.id),
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
+    mem.listUserSubagents(user.id),
     mem.recentMessages(user.id, 20, opts.historyBefore),
   ]);
 
@@ -74,6 +75,9 @@ export async function think(
     goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
     playbooks: playbooks
       .map((p) => `- ${p.name}${p.trigger ? ` [when: ${p.trigger}]` : ""}: ${p.instructions}`)
+      .join("\n"),
+    subagents: subagents
+      .map((s: any) => `- ${s.name}: ${s.brief || "(no brief)"} [tools: ${(s.tools || []).join(", ")}]`)
       .join("\n"),
   });
 

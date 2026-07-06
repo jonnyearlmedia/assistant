@@ -103,6 +103,21 @@ create table if not exists commitments (
 create index if not exists idx_commitments_followup on commitments(status, follow_up_at);
 create index if not exists idx_commitments_user on commitments(user_id, status);
 
+-- user-defined subagents: jonny spins up his own specialists by text (name + brief + allowed tool
+-- names). the `delegate` tool routes to these by name just like the built-in domains. editable.
+create table if not exists subagents (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references users(id) on delete cascade,
+  name        text not null,                      -- delegate target, e.g. "invoice_parser"
+  brief       text,                               -- one-line identity/instructions
+  tools       jsonb not null default '[]',        -- array of tool names it may use
+  active      boolean default true,
+  updated_at  timestamptz not null default now(),
+  created_at  timestamptz not null default now(),
+  unique (user_id, name)
+);
+create index if not exists idx_subagents_user on subagents(user_id, active);
+
 -- full conversation history + delivery tracking (reliability, not a black box)
 create table if not exists messages (
   id              uuid primary key default gen_random_uuid(),

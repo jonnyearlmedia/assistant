@@ -329,15 +329,39 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "delegate",
     description:
-      "Spin up a specialist SUBAGENT to handle a focused sub-task, so you stay lean and can run areas independently. domain: email | calendar | notion | tasks | research | memory. task: a clear, COMPLETE instruction (the specialist can't see this chat — hand it everything it needs). It runs with ONLY that domain's tools, verifies its own writes, and returns a short result. research = web lookup (current facts/news/prices/hours). Delegate several in one turn for independent work (e.g. check email AND scan the calendar); or just use your own tools directly for something simple/one-step.",
+      "Spin up a specialist SUBAGENT to handle a focused sub-task, so you stay lean and can run areas independently. domain: a built-in (email | calendar | notion | tasks | research | memory) OR the name of a custom specialist jonny created (see your custom specialists list / list_subagents). task: a clear, COMPLETE instruction (the specialist can't see this chat — hand it everything it needs). It runs with ONLY that specialist's tools, verifies its own writes, and returns a short result. research = web lookup. Delegate several in one turn for independent work; or just use your own tools directly for something simple/one-step.",
     input_schema: {
       type: "object",
       properties: {
-        domain: { type: "string", description: "email | calendar | notion | tasks | research | memory" },
+        domain: { type: "string", description: "built-in domain OR a custom specialist name" },
         task: { type: "string", description: "complete standalone instruction for the specialist" },
       },
       required: ["domain", "task"],
     },
+  },
+  {
+    name: "create_subagent",
+    description:
+      "Build a NEW custom specialist when jonny wants lexa to handle a specific recurring job its own way (e.g. 'invoice_parser', 'job_aggregator'). name = short handle (snake_case). brief = one line telling the specialist who it is + how to work. tools = the tool names it's allowed to use — pick from your OWN available tools (e.g. gmail_search, gmail_draft, notion_search, notion_create_page, ticktick_create_task, gcal_create, recall, web_search). Only real tool names are kept. After this, delegate to it by its name.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        brief: { type: "string" },
+        tools: { type: "array", items: { type: "string" }, description: "tool names this specialist may use" },
+      },
+      required: ["name", "tools"],
+    },
+  },
+  {
+    name: "list_subagents",
+    description: "List lexa's specialists — the built-in domains + jonny's custom ones (name, brief, tools). Use to see the fleet or before delegating to a custom one.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "delete_subagent",
+    description: "Delete one of jonny's custom specialists by name. (Built-in domains can't be deleted.)",
+    input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   },
 ];
 
@@ -517,6 +541,25 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
         return JSON.stringify(await mem.searchMemory(u, input.query, input.limit || 8));
       case "delegate":
         return await sub.runSubagent(u, input.domain, input.task);
+      case "create_subagent": {
+        // only allow real tool names (+ web_search, which lives in the research specialist)
+        const valid = new Set((TOOLS as any[]).map((t) => t?.name).filter(Boolean));
+        valid.add("web_search");
+        const requested: string[] = Array.isArray(input.tools) ? input.tools : [];
+        const tools = requested.filter((t) => valid.has(t));
+        if (!tools.length)
+          return JSON.stringify({ ok: false, detail: `no valid tools in that list. pick from: ${[...valid].join(", ")}` });
+        const name = String(input.name || "").trim().toLowerCase().replace(/\s+/g, "_");
+        if (!name) return JSON.stringify({ ok: false, detail: "need a name for the specialist" });
+        if (sub.subagentDomains().includes(name))
+          return JSON.stringify({ ok: false, detail: `"${name}" is a built-in specialist — pick a different name` });
+        const rec = await mem.createUserSubagent(u, name, input.brief || "", tools);
+        return JSON.stringify({ ok: true, created: rec, dropped: requested.filter((t) => !valid.has(t)) });
+      }
+      case "list_subagents":
+        return JSON.stringify({ builtin: sub.subagentDomains(), custom: await mem.listUserSubagents(u) });
+      case "delete_subagent":
+        return JSON.stringify(await mem.deleteUserSubagent(u, String(input.name || "").trim().toLowerCase().replace(/\s+/g, "_")));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;

@@ -98,6 +98,11 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - **memory_query** = `recall` tool → `searchMemory()` over the full messages table + facts (not just the
   ~20-msg window). Tradeoff: each delegated specialist is another model call (a bit more latency on complex
   tasks) in exchange for focus + parallelism + context hygiene.
+- **User-defined subagents** (`subagents` table): jonny builds his own specialists BY TEXT —
+  `create_subagent` (name + brief + allowed tool names, validated against the real tool set),
+  `list_subagents`, `delete_subagent`. `runSubagent` falls back to a DB lookup for any non-built-in
+  domain; custom specialists are injected into the system prompt so she knows her fleet. "as many as
+  you want, no deploy."
 
 ## 🗺️ Recommended roadmap (priority order)
 

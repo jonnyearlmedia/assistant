@@ -218,6 +218,54 @@ export async function recentMessages(userId: string, limit = 20, beforeIso?: str
   return (data ?? []).reverse();
 }
 
+// user-defined subagents: jonny spins up his own specialists by text. stored as name + brief +
+// allowed tool names; delegate routes to them by name just like the built-in domains.
+export async function createUserSubagent(userId: string, name: string, brief: string, tools: string[]) {
+  const { data, error } = await db
+    .from("subagents")
+    .upsert(
+      { user_id: userId, name, brief, tools, active: true, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,name" }
+    )
+    .select("id,name,brief,tools")
+    .single();
+  if (error) throw new Error(`createUserSubagent: ${error.message}`);
+  return data;
+}
+
+export async function listUserSubagents(userId: string) {
+  const { data, error } = await db
+    .from("subagents")
+    .select("name,brief,tools,active")
+    .eq("user_id", userId)
+    .eq("active", true)
+    .order("name");
+  if (error) throw new Error(`listUserSubagents: ${error.message}`);
+  return data ?? [];
+}
+
+export async function getUserSubagent(userId: string, name: string) {
+  const { data } = await db
+    .from("subagents")
+    .select("name,brief,tools")
+    .eq("user_id", userId)
+    .eq("name", name)
+    .eq("active", true)
+    .maybeSingle();
+  return data as { name: string; brief: string | null; tools: string[] } | null;
+}
+
+export async function deleteUserSubagent(userId: string, name: string) {
+  const { data, error } = await db
+    .from("subagents")
+    .delete()
+    .eq("user_id", userId)
+    .eq("name", name)
+    .select("name");
+  if (error) throw new Error(`deleteUserSubagent: ${error.message}`);
+  return { removed: data?.length ?? 0 };
+}
+
 // memory_query: search jonny's FULL history (not just the recent ~20-msg window) + his facts,
 // for when he references something older than what's already in context. substring match — simple,
 // but enough to surface "what did i say about X" / "that thing from last week".
