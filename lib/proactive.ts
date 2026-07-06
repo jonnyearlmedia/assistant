@@ -204,6 +204,45 @@ async function sendCheckinTo(user: User, date: string): Promise<void> {
   await db.from("users").update({ settings: { ...(user.settings as any), last_checkin: date } }).eq("id", user.id);
 }
 
+// backlog context for weekly planning: overdue + undated pile (by project) + what's already
+// scheduled + upcoming calendar — enough for her to propose concrete time-blocks.
+async function buildBacklogContext(): Promise<string> {
+  let ctx = "";
+  try {
+    const tt: any = await ticktick.listTasks("all");
+    if (tt.ok) {
+      if (tt.counts?.overdue)
+        ctx += `OVERDUE (${tt.counts.overdue}):\n` + (tt.overdue || []).slice(0, 10).map((x: any) => `- ${x.title} (was due ${x.due})`).join("\n") + "\n\n";
+      if (tt.counts?.undated) {
+        ctx += `UNDATED BACKLOG (${tt.counts.undated} total, by project):\n`;
+        for (const [proj, count] of Object.entries(tt.undated_by_project || {})) ctx += `- ${proj}: ${count}\n`;
+        if (tt.undated_sample?.length) ctx += `sample tasks: ${tt.undated_sample.slice(0, 12).map((x: any) => x.title).join("; ")}\n`;
+        ctx += "\n";
+      }
+      if (tt.dated?.length)
+        ctx += `ALREADY SCHEDULED:\n` + tt.dated.slice(0, 10).map((x: any) => `- ${x.title} @ ${x.due}`).join("\n") + "\n\n";
+    }
+  } catch {}
+  try {
+    const cal = await google.calendarUpcoming(10);
+    if (cal.ok && cal.events?.length)
+      ctx += "CALENDAR (next up):\n" + cal.events.map((e: any) => `- ${e.title} @ ${e.start}`).join("\n") + "\n";
+  } catch {}
+  return ctx;
+}
+
+async function sendWeeklyPlanningTo(user: User, date: string): Promise<void> {
+  const ctx = await buildBacklogContext();
+  const text = await composeProactive(
+    user,
+    "sunday evening — time to plan the week. surface his overdue + undated backlog, call out the 2-3 that actually matter, and offer to time-block them together RIGHT NOW (you can set due dates in ticktick or drop calendar blocks once he picks). concrete, not a lecture — make it easy to say 'yeah let's do it'.",
+    ctx || "no TickTick backlog data came through — just ask what he most wants to get done this week and offer to block time for it."
+  );
+  const res = await sendBubbles(user.id, user.phone, (user as any).linq_chat_id, text);
+  if (res.sent === 0) throw new Error("weekly planning: all bubbles failed to send");
+  await db.from("users").update({ settings: { ...(user.settings as any), last_weekly: date } }).eq("id", user.id);
+}
+
 // 2) morning brief — once/day at the user's brief hour. non-force enqueues (dedupe key =
 // exactly one per user per day, even across concurrent ticks); force sends immediately.
 export async function runDailyBrief(force = false): Promise<number> {
@@ -275,6 +314,31 @@ export async function runAutomations(): Promise<number> {
   return n;
 }
 
+// 5) weekly planning — sunday evening, offer to time-block the backlog + review the week ahead
+export async function runWeeklyPlanning(force = false): Promise<number> {
+  let n = 0;
+  for (const user of await allUsers()) {
+    const tz = user.timezone || "America/New_York";
+    const { hour, date, weekday } = nowParts(tz);
+    if (force) {
+      await sendWeeklyPlanningTo(user, date);
+      n++;
+      continue;
+    }
+    const planHour = (user.settings as any)?.planning_hour ?? 18;
+    const planDay = (user.settings as any)?.planning_weekday ?? 0; // 0 = sunday
+    if (weekday !== planDay || hour !== planHour) continue;
+    if ((user.settings as any)?.last_weekly === date) continue;
+    const job = await q.enqueue(
+      "weekly_planning",
+      { user_id: user.id, date },
+      { dedupeKey: `weekly-${user.id}-${date}`, userId: user.id }
+    );
+    if (job) n++;
+  }
+  return n;
+}
+
 // job handlers — the execution side of the queue. every handler is idempotent-guarded
 // (re-checks the once-a-day marker + drops stale work) because retries WILL re-enter it.
 export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
@@ -304,6 +368,16 @@ export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
     if (p.date !== date) return;
     if ((user.settings as any)?.last_checkin === date) return;
     await sendCheckinTo(user, date);
+  },
+
+  weekly_planning: async (job) => {
+    const p = job.payload || {};
+    const user = await getUser(p.user_id);
+    if (!user) return;
+    const { date } = nowParts(user.timezone || "America/New_York");
+    if (p.date !== date) return;
+    if ((user.settings as any)?.last_weekly === date) return;
+    await sendWeeklyPlanningTo(user, date);
   },
 
   automation: async (job) => {
@@ -343,6 +417,7 @@ export async function runTick() {
     ["commitments", dispatchDueCommitments],
     ["brief", runDailyBrief],
     ["checkin", proactiveCheckin],
+    ["planning", runWeeklyPlanning],
     ["automations", runAutomations],
   ] as const) {
     try {

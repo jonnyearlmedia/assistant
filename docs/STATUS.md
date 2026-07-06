@@ -104,8 +104,11 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
    tool (persona-driven in `think()`), stores it in the `commitments` table, and `dispatchDueCommitments`
    (in `runTick`) follows up when `follow_up_at` passes — one nudge, then marks 'nudged' (never nags again).
    His reply resolves it kept/missed via `resolve_commitment`, logged to `behavior_log` (feeds #3 next).
-5. **Weekly review** — Sunday-night automation: what got done/slipped, plan the week from TickTick/Notion.
-6. **Time-block the backlog** — proactively propose dates/calendar blocks for his pile of undated TickTick tasks.
+5. **Weekly review / time-block the backlog** — ✅ DONE (combined). `runWeeklyPlanning` (in `runTick`,
+   Sunday eve, `planning_hour`/`planning_weekday` settings, dedupe `weekly-<user>-<date>`) surfaces
+   overdue + undated backlog by project + calendar, and offers to time-block the 2-3 that matter RIGHT
+   THEN. Writes only after he okays (persona rule: ticktick_update due dates / gcal_create blocks,
+   verified). On demand: `?force=planning`. Backlog reads via `buildBacklogContext`.
 7. **Vision workflows** — food pic → macros into Notion; screenshot → extract event/task → set it.
 8. **Tone tuning** — jonny wasn't sold on heavy gen-z. Options offered: clean&natural / warm&hype /
    dry&minimal / sharp-no-BS coach. Awaiting his pick; then retune `lib/persona.ts`.

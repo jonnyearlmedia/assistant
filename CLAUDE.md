@@ -64,7 +64,7 @@ lib/
   queue.ts        durable job queue on the jobs table: atomic claim, retry w/ exponential backoff,
                   dead-letter, dedupe_key exactly-once, tick lease, stuck-job reaper, prune
   audit.ts        auditWrite() → write_audits ledger (fire-and-forget receipt for every external write)
-  proactive.ts    dispatchDueReminders, dispatchDueCommitments, runDailyBrief, proactiveCheckin, runAutomations, JOB_HANDLERS, runTick
+  proactive.ts    dispatchDueReminders, dispatchDueCommitments, runDailyBrief, proactiveCheckin, runWeeklyPlanning, runAutomations, JOB_HANDLERS, runTick
                   (once-a-day work goes through the queue with per-user-per-day dedupe keys)
   integrations/
     tokens.ts     owner resolution + OAuth token storage (integrations table)
@@ -115,6 +115,7 @@ or from jonny — they are intentionally NOT committed. Most dev needs only git 
      route on a deploy so you can confirm the new build is live.
    - Fire proactive on demand: `GET /api/cron/tick?force=brief` (or `force=checkin`) with the bypass + key.
      `?force=jobs` drains the job queue immediately (bypasses the tick lease) — use it to verify retries.
+     `?force=planning` fires the weekly backlog-planning message on demand.
    - Inspect reliability: `jobs` table (status `dead` = failed after all retries — inspect, don't delete;
      `pending` with `last_error` = mid-backoff), `write_audits` (one row per external write, verified flag).
    - Inspect behavior: query the Supabase `messages` table (via the Supabase MCP) to see what she
