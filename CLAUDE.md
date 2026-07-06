@@ -69,6 +69,7 @@ lib/
                   (once-a-day work goes through the queue with per-user-per-day dedupe keys)
   integrations/
     tokens.ts     owner resolution + OAuth token storage (integrations table)
+    transcribe.ts voice-note transcription (Linq audio part → Deepgram → text into think()); gated on DEEPGRAM_API_KEY
     ticktick.ts   OAuth + full CRUD (create/list/complete/update-move/delete) verified read-back
     notion.ts     search/read/query any db + create page in any db (schema-aware) + append + Master Planner
     google.ts     Gmail search/send/draft, Calendar upcoming/create/update/delete, Drive search/read (2 gmail slots)
@@ -99,7 +100,8 @@ Set in Vercel project env (Settings → Environment Variables), for Production +
 `OWNER_PHONE`, `APP_BASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_MAPS_API_KEY`,
 `TICKTICK_CLIENT_ID`, `TICKTICK_CLIENT_SECRET`, `LINQ_WEBHOOK_SECRET`.
 Optional: `LINQ_ENFORCE_SIG=1` (enforce webhook sig), `SETTLE_MS` (debounce window),
-`LEXA_TRIAGE_MODEL` (Haiku model for the cheap inbound triage; defaults to claude-haiku-4-5).
+`LEXA_TRIAGE_MODEL` (Haiku model for the cheap inbound triage; defaults to claude-haiku-4-5),
+`DEEPGRAM_API_KEY` (turns ON voice-note transcription; unset = voice memos fall back to "couldn't open it").
 GitHub repo secret: `LEXA_TICK_URL` (full /api/cron/tick URL incl. bypass + cron key) for the pinger.
 
 A session that needs to hit protected endpoints via curl gets the bypass/cron values from Vercel env

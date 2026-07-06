@@ -7,6 +7,7 @@ import { buildSystemPrompt } from "./persona";
 import { TOOLS, dispatch } from "./tools";
 import { User, db } from "./db";
 import { fetchMedia, fetchTextAttachment } from "./linq";
+import { transcribeAudioUrl } from "./integrations/transcribe";
 import * as mem from "./memory";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -89,6 +90,13 @@ export async function think(
       const img = await fetchMedia(u);
       if (img) {
         blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+        continue;
+      }
+      // voice memo → transcript (no-op unless DEEPGRAM_API_KEY is set). treat the transcript as
+      // what he said: act on it like a normal text, don't just read it back to him.
+      const voice = await transcribeAudioUrl(u);
+      if (voice) {
+        blocks.push({ type: "text", text: `[jonny sent a voice note — transcript follows; treat it as what he said]\n${voice}` });
         continue;
       }
       const file = await fetchTextAttachment(u);
