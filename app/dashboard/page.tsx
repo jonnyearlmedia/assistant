@@ -1,7 +1,6 @@
-// lexa's control panel — view & edit EVERYTHING adjustable: memories (by category), rules,
-// workflows, reminders, commitments, places, settings, and a visual subagent builder — plus live
-// to-dos, spend, and reliability. Owner-only via Vercel Auth. The dashboard is meant to be the
-// efficient management surface so you don't have to run everything through a chat thread.
+// lexa's control panel — organized into clear TIERS so it's obvious what goes where.
+// her brain (instructions) → what she knows (memory) → how she works (workflows + specialists) →
+// when she acts (proactive) → your live stuff → under the hood. Owner-only via Vercel Auth.
 import { db } from "@/lib/db";
 import { ownerUserId } from "@/lib/integrations/tokens";
 import { computeSpend, periodSince } from "@/lib/spend";
@@ -10,7 +9,6 @@ import * as ticktick from "@/lib/integrations/ticktick";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// tool catalog for the subagent builder (grouped for a sane checkbox UI)
 const TOOL_CATALOG: [string, string[]][] = [
   ["email", ["gmail_search", "gmail_send", "gmail_draft"]],
   ["calendar", ["gcal_upcoming", "gcal_create", "gcal_update", "gcal_delete", "drive_time"]],
@@ -35,12 +33,12 @@ async function getData() {
       db.from("reminders").select("id,title,due_at,status,location,recurrence").eq("user_id", uid).eq("status", "scheduled").order("due_at"),
       db.from("integrations").select("provider,status,meta").eq("user_id", uid),
       db.from("users").select("*").eq("id", uid).single(),
-      db.from("commitments").select("id,what,context,follow_up_at,status,outcome").eq("user_id", uid).order("created_at", { ascending: false }).limit(25),
+      db.from("commitments").select("id,what,follow_up_at,status,outcome").eq("user_id", uid).order("created_at", { ascending: false }).limit(25),
       db.from("subagents").select("id,name,brief,tools,active").eq("user_id", uid).order("name"),
       db.from("places").select("id,name,address").eq("user_id", uid).order("name"),
       db.from("messages").select("direction,body,created_at").eq("user_id", uid).order("created_at", { ascending: false }).limit(14),
       db.from("jobs").select("status,kind,last_error").order("created_at", { ascending: false }).limit(60),
-      db.from("write_audits").select("provider,action,verified,created_at").eq("user_id", uid).order("created_at", { ascending: false }).limit(8),
+      db.from("write_audits").select("action,verified").eq("user_id", uid).order("created_at", { ascending: false }).limit(8),
     ]);
   const spendWeek = await computeSpend(periodSince("week")).catch(() => null);
   const spendAll = await computeSpend().catch(() => null);
@@ -49,354 +47,292 @@ async function getData() {
     todos = await ticktick.listTasks("today");
   } catch {}
   return {
-    facts: facts.data || [],
-    goals: goals.data || [],
-    playbooks: playbooks.data || [],
-    reminders: reminders.data || [],
-    integrations: integrations.data || [],
-    user: user.data,
-    commitments: commitments.data || [],
-    subagents: subagents.data || [],
-    places: places.data || [],
-    messages: (messages.data || []).reverse(),
-    jobs: jobs.data || [],
-    audits: audits.data || [],
-    spendWeek,
-    spendAll,
-    todos,
+    facts: facts.data || [], goals: goals.data || [], playbooks: playbooks.data || [], reminders: reminders.data || [],
+    integrations: integrations.data || [], user: user.data, commitments: commitments.data || [], subagents: subagents.data || [],
+    places: places.data || [], messages: (messages.data || []).reverse(), jobs: jobs.data || [], audits: audits.data || [],
+    spendWeek, spendAll, todos,
   };
 }
 
-// ---- styles ----
-const box: React.CSSProperties = { background: "#15151b", border: "1px solid #26262f", borderRadius: 12, padding: 16, marginBottom: 14 };
-const chip: React.CSSProperties = { fontSize: 11, color: "#8b8b99", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 };
-const del: React.CSSProperties = { background: "transparent", border: "1px solid #3a2530", color: "#e0708f", borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontSize: 12 };
-const add: React.CSSProperties = { ...del, borderColor: "#254a3a", color: "#5fd08a" };
-const inp: React.CSSProperties = { background: "#0d0d12", border: "1px solid #26262f", color: "#eee", borderRadius: 6, padding: "6px 8px", marginTop: 3, width: "100%" };
-const row: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1c1c24", fontSize: 14 };
-const btnDo: React.CSSProperties = { background: "transparent", border: "1px solid #2f3550", color: "#8fb0ff", borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontSize: 12 };
-
 export default async function Dashboard() {
   const d = await getData();
-  if (!d) {
-    return <main style={{ fontFamily: "system-ui", background: "#0b0b0f", color: "#eee", minHeight: "100vh", padding: 24 }}>no user yet — text lexa first, then refresh.</main>;
-  }
+  if (!d) return <main style={{ fontFamily: "system-ui", background: "#0b0b0f", color: "#eee", minHeight: "100vh", padding: 24 }}>no user yet — text lexa first, then refresh.</main>;
   const s = (d.user?.settings as any) || {};
-
-  // group facts by category
   const factsByCat: Record<string, any[]> = {};
   for (const f of d.facts as any[]) (factsByCat[f.category] ||= []).push(f);
-
   const jobsPending = d.jobs.filter((j: any) => j.status === "pending").length;
   const jobsDead = d.jobs.filter((j: any) => j.status === "dead");
-  const wd = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
   return (
-    <main style={{ fontFamily: "system-ui", background: "#0b0b0f", color: "#eee", minHeight: "100vh", padding: "24px 16px", maxWidth: 820, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 30, margin: "0 0 2px" }}>lexa · control</h1>
-      <p style={{ color: "#8b8b99", marginTop: 0 }}>everything she knows and does — view, edit, or wipe anything.</p>
+    <main>
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <div className="wrap">
+        <h1>lexa · control</h1>
+        <p className="sub">everything she knows and does. each section says what belongs in it — edit or wipe anything.</p>
 
-      {/* quick stats */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Stat label="spend · week" value={d.spendWeek ? `~$${d.spendWeek.total_usd.toFixed(2)}` : "—"} />
-        <Stat label="spend · all" value={d.spendAll ? `~$${d.spendAll.total_usd.toFixed(2)}` : "—"} />
-        <Stat label="jobs pending" value={String(jobsPending)} />
-        <Stat label="jobs dead" value={String(jobsDead.length)} tone={jobsDead.length ? "bad" : "ok"} />
-        <Stat label="specialists" value={String(d.subagents.length + 6)} />
-      </div>
+        <div className="stats">
+          <Stat label="spend·wk" value={d.spendWeek ? `~$${d.spendWeek.total_usd.toFixed(2)}` : "—"} />
+          <Stat label="spend·all" value={d.spendAll ? `~$${d.spendAll.total_usd.toFixed(2)}` : "—"} />
+          <Stat label="jobs pending" value={String(jobsPending)} />
+          <Stat label="jobs dead" value={String(jobsDead.length)} tone={jobsDead.length ? "bad" : "ok"} />
+          <Stat label="specialists" value={`${d.subagents.length}+6`} />
+        </div>
 
-      {/* integrations */}
-      <div style={box}>
-        <div style={chip}>integrations</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          {["ticktick", "notion", "google", "google2"].map((p) => {
-            const r: any = d.integrations.find((i: any) => i.provider === p);
-            const on = r?.status === "connected";
-            const label = p === "google2" ? "gmail #2" : p;
-            const connectPath: Record<string, string> = { ticktick: "/api/connect/ticktick", google: "/api/connect/google", google2: "/api/connect/google2" };
+        {/* ───── TIER 1: her brain ───── */}
+        <Tier label="1 · her brain" sub="how she thinks, behaves, and talks — the top-level rules" />
+        <Section title="🧠 custom instructions" open help="YOUR standing rules, in your words — 'always X / never Y', your voice, hard preferences. sits above her defaults and applies to every message. this is the highest-level dial.">
+          <form data-act="set_instructions">
+            <textarea name="instructions" defaultValue={s.custom_instructions || ""} rows={5} className="ta"
+              placeholder="e.g. always call me by my first name. no emojis before noon. if i go quiet on a goal for 2 days, push me harder. keep replies to 2 bubbles max unless i ask for detail." />
+            <button className="btn add">save instructions</button>
+          </form>
+        </Section>
+
+        {/* ───── TIER 2: what she knows ───── */}
+        <Tier label="2 · what she knows" sub="durable memory about you — the more here, the more she gets you" />
+        <Section title="🗂 facts" count={d.facts.length} help="discrete things to remember about you, grouped by category (routine, preference, work, health…). one fact = one key + value. use for stable truths, not tasks.">
+          {Object.keys(factsByCat).sort().map((cat) => (
+            <div key={cat} className="catgrp">
+              <div className="catname">{cat}</div>
+              {factsByCat[cat].map((f: any) => (
+                <div key={f.id} className="row">
+                  <form data-act="edit_fact" className="frm grow">
+                    <input type="hidden" name="id" value={f.id} />
+                    <span className="fkey">{f.key}</span>
+                    <input name="value" defaultValue={f.value} className="in grow" />
+                    <button className="btn add sm">save</button>
+                  </form>
+                  <button className="btn del sm" data-del="fact" data-id={f.id}>forget</button>
+                </div>
+              ))}
+            </div>
+          ))}
+          <form data-act="add_fact" className="frm mt">
+            <input name="category" placeholder="category" className="in" style={{ maxWidth: 120 }} />
+            <input name="key" placeholder="key" className="in" style={{ maxWidth: 130 }} />
+            <input name="value" placeholder="value" className="in grow" />
+            <button className="btn add">+ add</button>
+          </form>
+        </Section>
+        <Section title="🎯 goals" count={d.goals.length} help="what you're working toward. she holds you accountable to these over time — bigger than a single task.">
+          {(d.goals as any[]).map((g) => (
+            <div key={g.id} className="row"><span>{g.title}{g.detail ? ` — ${g.detail}` : ""}</span><button className="btn del sm" data-del="goal" data-id={g.id}>drop</button></div>
+          ))}
+          <form data-act="add_goal" className="frm mt"><input name="title" placeholder="goal" className="in grow" /><input name="detail" placeholder="detail (optional)" className="in grow" /><button className="btn add">+ add</button></form>
+        </Section>
+        <Section title="📍 places" count={d.places.length} help="named addresses (home, gym, work) so 'leave now' reminders and drive-times work.">
+          {(d.places as any[]).map((p) => (<div key={p.id} className="row"><span><b>{p.name}</b> — {p.address}</span><button className="btn del sm" data-del="place" data-id={p.id}>del</button></div>))}
+          <form data-act="add_place" className="frm mt"><input name="name" placeholder="home/gym/work" className="in" style={{ maxWidth: 150 }} /><input name="address" placeholder="address" className="in grow" /><button className="btn add">+ add</button></form>
+        </Section>
+
+        {/* ───── TIER 3: how she works ───── */}
+        <Tier label="3 · how she works" sub="repeatable procedures + the specialist workers that run them" />
+        <Section title="📋 rules & workflows" count={d.playbooks.length} help="taught step-by-step procedures & formats — 'when i log a workout, put it in notion like THIS'. use for anything she should do a consistent way every time. (⏱ = runs on a schedule.)">
+          {(d.playbooks as any[]).map((p) => {
+            const auto = (p.format as any)?.automation;
             return (
-              <span key={p} style={{ fontSize: 13, padding: "4px 10px", borderRadius: 20, background: on ? "#16301f" : "#2a1a1a", color: on ? "#5fd08a" : "#d08a5f", display: "inline-flex", gap: 6, alignItems: "center" }}>
-                {on ? "●" : "○"} {label}{r?.meta?.email ? ` (${r.meta.email})` : ""}
-                {!on && connectPath[p] ? <a href={connectPath[p]} style={{ color: "#8fb0ff", textDecoration: "underline" }}>connect →</a> : null}
-              </span>
+              <div key={p.id} className="row col">
+                <span><b>{p.name}</b>{auto ? <span className="tag amber">⏱ auto</span> : null}{!p.active ? <span className="tag muted">off</span> : null}{p.trigger ? <span className="dim"> [{p.trigger}]</span> : null}<div className="dim2">{p.instructions}</div></span>
+                <span className="actions">
+                  <button className="btn do sm" data-do={JSON.stringify({ action: "toggle_playbook", id: p.id, active: !p.active })}>{p.active ? "pause" : "on"}</button>
+                  <button className="btn del sm" data-del="playbook" data-id={p.id}>del</button>
+                </span>
+              </div>
             );
           })}
-        </div>
-      </div>
+          <form data-act="save_playbook" className="mt">
+            <div className="frm"><input name="name" placeholder="name" className="in" style={{ maxWidth: 160 }} /><input name="trigger" placeholder="when (optional)" className="in grow" /></div>
+            <textarea name="instructions" rows={2} className="ta mt6" placeholder="exactly what to do, in her words" />
+            <button className="btn add mt6">+ save rule/workflow</button>
+          </form>
+        </Section>
+        <Section title="🤖 subagents" count={`${d.subagents.length} custom`} help="specialist workers she delegates to — one per job area. built-in: email · calendar · notion · tasks · research · memory. build your own below: name it, brief it, tick the tools it may use.">
+          {(d.subagents as any[]).map((sa) => (
+            <div key={sa.id} className="row col">
+              <span><b className="blue">{sa.name}</b>{sa.brief ? ` — ${sa.brief}` : ""}<div className="dim2">tools: {(sa.tools || []).join(", ")}</div></span>
+              <button className="btn del sm" data-del="subagent" data-id={sa.id}>delete</button>
+            </div>
+          ))}
+          <form data-act="save_subagent" className="mt builder">
+            <div className="frm"><input name="name" placeholder="name (e.g. invoice_parser)" className="in grow" /><input name="brief" placeholder="one-line brief: who it is + how it works" className="in grow" /></div>
+            <div className="tools">
+              {TOOL_CATALOG.map(([group, tools]) => (
+                <div key={group} className="toolgrp">
+                  <span className="toolgroupname">{group}</span>
+                  {tools.map((t) => (<label key={t} className="tk"><input type="checkbox" name="tools" value={t} /> {t}</label>))}
+                </div>
+              ))}
+            </div>
+            <button className="btn add mt6">+ build specialist</button>
+          </form>
+        </Section>
 
-      {/* settings */}
-      <div style={box}>
-        <div style={chip}>settings</div>
-        <form data-act="set_settings" style={{ display: "grid", gap: 8, marginTop: 8, gridTemplateColumns: "1fr 1fr 1fr" }}>
-          <L t="morning brief hr"><input name="brief_hour" defaultValue={s.brief_hour ?? 8} style={inp} /></L>
-          <L t="check-in hr"><input name="checkin_hour" defaultValue={s.checkin_hour ?? 19} style={inp} /></L>
-          <L t="planning hr"><input name="planning_hour" defaultValue={s.planning_hour ?? 18} style={inp} /></L>
-          <L t="planning day (0=sun)"><input name="planning_weekday" defaultValue={s.planning_weekday ?? 0} style={inp} /></L>
-          <L t="timezone"><input name="timezone" defaultValue={d.user?.timezone || "America/New_York"} style={inp} /></L>
-          <L t="home address"><input name="home_address" defaultValue={d.user?.home_address || ""} style={inp} /></L>
-          <label style={{ fontSize: 13, gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="triage_disabled" defaultChecked={!!s.triage_disabled} /> disable cheap triage (force full brain on every text)
-          </label>
-          <button style={{ ...add, gridColumn: "1 / -1", padding: 8 }}>save settings</button>
-        </form>
-      </div>
-
-      {/* SUBAGENTS — build your fleet */}
-      <div style={box}>
-        <div style={chip}>subagents · your fleet ({d.subagents.length} custom + 6 built-in)</div>
-        <div style={{ fontSize: 12, color: "#8b8b99", margin: "6px 0" }}>
-          built-in: email · calendar · notion · tasks · research · memory
-        </div>
-        {(d.subagents as any[]).map((sa) => (
-          <div key={sa.id} style={{ ...row, alignItems: "flex-start" }}>
-            <span>
-              <b style={{ color: "#8fb0ff" }}>{sa.name}</b>{sa.brief ? ` — ${sa.brief}` : ""}
-              <div style={{ fontSize: 11, color: "#6b6b77", marginTop: 2 }}>tools: {(sa.tools || []).join(", ")}</div>
-            </span>
-            <button style={del} data-del="subagent" data-id={sa.id}>delete</button>
-          </div>
-        ))}
-        <form data-act="save_subagent" style={{ marginTop: 12, borderTop: "1px solid #26262f", paddingTop: 12 }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input name="name" placeholder="name (e.g. invoice_parser)" style={{ ...inp, flex: 1 }} />
-            <input name="brief" placeholder="one-line brief: who it is + how it works" style={{ ...inp, flex: 2 }} />
-          </div>
-          <div style={{ marginTop: 8 }}>
-            {TOOL_CATALOG.map(([group, tools]) => (
-              <div key={group} style={{ marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: "#6b6b77", display: "inline-block", width: 96 }}>{group}</span>
-                {tools.map((t) => (
-                  <label key={t} style={{ fontSize: 12, marginRight: 10, color: "#c7c7d1" }}>
-                    <input type="checkbox" name="tools" value={t} /> {t}
-                  </label>
-                ))}
-              </div>
-            ))}
-          </div>
-          <button style={{ ...add, marginTop: 6 }}>+ build specialist</button>
-        </form>
-      </div>
-
-      {/* FACTS grouped by category */}
-      <div style={box}>
-        <div style={chip}>memories · facts ({d.facts.length})</div>
-        {Object.keys(factsByCat).sort().map((cat) => (
-          <div key={cat} style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 12, color: "#8fb0ff", fontWeight: 600, marginBottom: 2 }}>{cat}</div>
-            {factsByCat[cat].map((f: any) => (
-              <div key={f.id} style={row}>
-                <span style={{ flex: 1 }}>
-                  <b style={{ color: "#8b8b99" }}>{f.key}:</b>{" "}
-                  <form data-act="edit_fact" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input type="hidden" name="id" value={f.id} />
-                    <input name="value" defaultValue={f.value} style={{ ...inp, width: 340, marginTop: 0 }} />
-                    <button style={add}>save</button>
-                  </form>
-                </span>
-                <button style={del} data-del="fact" data-id={f.id}>forget</button>
-              </div>
-            ))}
-          </div>
-        ))}
-        <form data-act="add_fact" style={{ display: "flex", gap: 6, marginTop: 12 }}>
-          <input name="category" placeholder="category" style={{ ...inp, width: 100 }} />
-          <input name="key" placeholder="key" style={{ ...inp, width: 120 }} />
-          <input name="value" placeholder="value" style={{ ...inp, flex: 1 }} />
-          <button style={add}>+ add</button>
-        </form>
-      </div>
-
-      {/* GOALS */}
-      <div style={box}>
-        <div style={chip}>goals ({d.goals.length})</div>
-        {(d.goals as any[]).map((g) => (
-          <div key={g.id} style={row}>
-            <span>{g.title}{g.detail ? ` — ${g.detail}` : ""}</span>
-            <button style={del} data-del="goal" data-id={g.id}>drop</button>
-          </div>
-        ))}
-        <form data-act="add_goal" style={{ display: "flex", gap: 6, marginTop: 10 }}>
-          <input name="title" placeholder="goal" style={{ ...inp, flex: 1 }} />
-          <input name="detail" placeholder="detail (optional)" style={{ ...inp, flex: 1 }} />
-          <button style={add}>+ add</button>
-        </form>
-      </div>
-
-      {/* PLAYBOOKS — rules & workflows */}
-      <div style={box}>
-        <div style={chip}>rules & workflows · playbooks ({d.playbooks.length})</div>
-        {(d.playbooks as any[]).map((p) => {
-          const auto = (p.format as any)?.automation;
-          return (
-            <div key={p.id} style={{ ...row, alignItems: "flex-start" }}>
-              <span>
-                <b>{p.name}</b>
-                {auto ? <span style={{ fontSize: 10, color: "#e0b070", marginLeft: 6 }}>⏱ automation</span> : null}
-                {!p.active ? <span style={{ fontSize: 10, color: "#8b8b99", marginLeft: 6 }}>(off)</span> : null}
-                {p.trigger ? <span style={{ fontSize: 11, color: "#6b6b77" }}> [{p.trigger}]</span> : null}
-                <div style={{ fontSize: 12, color: "#c7c7d1", marginTop: 2 }}>{p.instructions}</div>
-              </span>
-              <span style={{ display: "flex", gap: 6 }}>
-                <button style={btnDo} data-do={JSON.stringify({ action: "toggle_playbook", id: p.id, active: !p.active })}>{p.active ? "pause" : "on"}</button>
-                <button style={del} data-del="playbook" data-id={p.id}>del</button>
+        {/* ───── TIER 4: when she acts on her own ───── */}
+        <Tier label="4 · when she acts on her own" sub="proactive nudges & follow-through" />
+        <Section title="⏰ reminders" count={d.reminders.length} help="one-off or recurring nudges at a specific time. for a specific moment — unlike a goal (ongoing) or a rule (a procedure).">
+          {(d.reminders as any[]).map((r) => (<div key={r.id} className="row"><span>{r.title} · {new Date(r.due_at).toLocaleString()}{r.recurrence ? ` (${r.recurrence})` : ""}{r.location ? ` @ ${r.location}` : ""}</span><button className="btn del sm" data-del="reminder" data-id={r.id}>cancel</button></div>))}
+          <form data-act="add_reminder" className="frm mt"><input name="title" placeholder="remind me to…" className="in grow" /><input name="due_at" type="datetime-local" className="in" /><input name="location" placeholder="location (optional)" className="in" style={{ maxWidth: 150 }} /><button className="btn add">+ add</button></form>
+        </Section>
+        <Section title="🤝 commitments" count={d.commitments.length} help="things you said you'd do ('i'll hit the gym later') — she catches these from your texts and follows up. mark kept/missed to build your accountability record.">
+          {(d.commitments as any[]).map((c) => (
+            <div key={c.id} className="row">
+              <span>{c.what}<span className={`tag ${c.status === "kept" ? "green" : c.status === "missed" ? "red" : "muted"}`}>{c.status}</span></span>
+              <span className="actions">
+                {c.status === "open" || c.status === "nudged" ? (<>
+                  <button className="btn add sm" data-do={JSON.stringify({ action: "resolve_commitment", id: c.id, status: "kept" })}>kept</button>
+                  <button className="btn del sm" data-do={JSON.stringify({ action: "resolve_commitment", id: c.id, status: "missed" })}>missed</button>
+                </>) : null}
+                <button className="btn del sm" data-del="commitment" data-id={c.id}>del</button>
               </span>
             </div>
-          );
-        })}
-        <form data-act="save_playbook" style={{ marginTop: 12 }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input name="name" placeholder="name" style={{ ...inp, width: 140 }} />
-            <input name="trigger" placeholder="when (optional)" style={{ ...inp, width: 160 }} />
+          ))}
+        </Section>
+
+        {/* ───── TIER 5: your live stuff ───── */}
+        <Tier label="5 · your live stuff" sub="pulled live from your connected apps" />
+        <Section title="✅ to-dos · ticktick" help="live from ticktick (your source of truth). complete a task or quick-add one here.">
+          {!d.todos?.ok ? <div className="warn">couldn't load ticktick (not connected or api error)</div> : (<>
+            {(d.todos.overdue || []).length ? <div className="grouplbl red">overdue ({d.todos.counts.overdue})</div> : null}
+            {(d.todos.overdue || []).slice(0, 8).map((t: any) => (<div key={t.id} className="row"><span>{t.title} <span className="dim">· {t.project}</span></span><button className="btn do sm" data-do={JSON.stringify({ action: "ticktick_complete", task_id: t.id, project_id: t.projectId })}>done</button></div>))}
+            {(d.todos.dated || []).length ? <div className="grouplbl blue">today / soon</div> : null}
+            {(d.todos.dated || []).slice(0, 10).map((t: any) => (<div key={t.id} className="row"><span>{t.title} <span className="dim">· {t.project}</span></span><button className="btn do sm" data-do={JSON.stringify({ action: "ticktick_complete", task_id: t.id, project_id: t.projectId })}>done</button></div>))}
+            <div className="dim mt6">undated backlog: {d.todos.counts?.undated ?? 0} across {Object.keys(d.todos.undated_by_project || {}).join(", ") || "—"}</div>
+          </>)}
+          <form data-act="ticktick_add" className="frm mt"><input name="title" placeholder="new task" className="in grow" /><input name="project" placeholder="list (optional)" className="in" style={{ maxWidth: 130 }} /><button className="btn add">+ add</button></form>
+        </Section>
+
+        {/* ───── TIER 6: under the hood ───── */}
+        <Tier label="6 · under the hood" sub="config, connections, health" />
+        <Section title="⚙️ settings" help="when her proactive stuff fires + how she runs.">
+          <form data-act="set_settings" className="grid3">
+            <L t="brief hr"><input name="brief_hour" defaultValue={s.brief_hour ?? 8} className="in" /></L>
+            <L t="check-in hr"><input name="checkin_hour" defaultValue={s.checkin_hour ?? 19} className="in" /></L>
+            <L t="planning hr"><input name="planning_hour" defaultValue={s.planning_hour ?? 18} className="in" /></L>
+            <L t="planning day (0=sun)"><input name="planning_weekday" defaultValue={s.planning_weekday ?? 0} className="in" /></L>
+            <L t="timezone"><input name="timezone" defaultValue={d.user?.timezone || "America/New_York"} className="in" /></L>
+            <L t="home address"><input name="home_address" defaultValue={d.user?.home_address || ""} className="in" /></L>
+            <label className="ckrow"><input type="checkbox" name="triage_disabled" defaultChecked={!!s.triage_disabled} /> disable cheap triage (full brain on every text)</label>
+            <button className="btn add wide">save settings</button>
+          </form>
+        </Section>
+        <Section title="🔌 integrations" help="connect services yourself with the links — no dev needed.">
+          <div className="chips">
+            {["ticktick", "notion", "google", "google2"].map((p) => {
+              const r: any = d.integrations.find((i: any) => i.provider === p);
+              const on = r?.status === "connected";
+              const label = p === "google2" ? "gmail #2" : p;
+              const path: Record<string, string> = { ticktick: "/api/connect/ticktick", google: "/api/connect/google", google2: "/api/connect/google2" };
+              return <span key={p} className={`chip ${on ? "on" : "off"}`}>{on ? "●" : "○"} {label}{r?.meta?.email ? ` (${r.meta.email})` : ""}{!on && path[p] ? <a href={path[p]} className="connect">connect →</a> : null}</span>;
+            })}
           </div>
-          <textarea name="instructions" placeholder="exactly what to do, in her words" style={{ ...inp, height: 54, marginTop: 6 }} />
-          <button style={{ ...add, marginTop: 6 }}>+ save rule/workflow</button>
-        </form>
+        </Section>
+        <Section title="🩺 reliability & activity" help="is her proactive engine healthy, what she wrote, what she's been saying.">
+          {jobsDead.length ? jobsDead.slice(0, 6).map((j: any, i: number) => (<div key={i} className="row red sm"><span>dead: {j.kind}</span><span className="dim ell">{j.last_error}</span></div>)) : <div className="ok">✓ no dead jobs</div>}
+          <div className="dim mt6">recent writes: {(d.audits as any[]).map((a) => `${a.action}${a.verified ? "✓" : "✗"}`).join("  ·  ") || "none yet"}</div>
+          <div className="msgs mt6">{(d.messages as any[]).map((m, i) => (<div key={i} className="msg"><b className={m.direction === "inbound" ? "you" : "her"}>{m.direction === "inbound" ? "you" : "lexa"}:</b> {(m.body || "").slice(0, 160)}</div>))}</div>
+        </Section>
       </div>
-
-      {/* TO-DOS — ticktick */}
-      <div style={box}>
-        <div style={chip}>to-dos · ticktick</div>
-        {!d.todos?.ok ? (
-          <div style={{ fontSize: 13, color: "#d08a5f", marginTop: 8 }}>couldn't load ticktick (not connected or api error)</div>
-        ) : (
-          <>
-            {(d.todos.overdue || []).length ? <div style={{ fontSize: 12, color: "#e0708f", marginTop: 8 }}>overdue ({d.todos.counts.overdue})</div> : null}
-            {(d.todos.overdue || []).slice(0, 8).map((t: any) => (
-              <div key={t.id} style={row}>
-                <span>{t.title} <span style={{ color: "#6b6b77", fontSize: 12 }}>· {t.project}</span></span>
-                <button style={btnDo} data-do={JSON.stringify({ action: "ticktick_complete", task_id: t.id, project_id: t.projectId })}>done</button>
-              </div>
-            ))}
-            {(d.todos.dated || []).length ? <div style={{ fontSize: 12, color: "#8fb0ff", marginTop: 8 }}>today/soon</div> : null}
-            {(d.todos.dated || []).slice(0, 10).map((t: any) => (
-              <div key={t.id} style={row}>
-                <span>{t.title} <span style={{ color: "#6b6b77", fontSize: 12 }}>· {t.project}</span></span>
-                <button style={btnDo} data-do={JSON.stringify({ action: "ticktick_complete", task_id: t.id, project_id: t.projectId })}>done</button>
-              </div>
-            ))}
-            <div style={{ fontSize: 11, color: "#6b6b77", marginTop: 6 }}>
-              undated backlog: {d.todos.counts?.undated ?? 0} across {Object.keys(d.todos.undated_by_project || {}).join(", ") || "—"}
-            </div>
-          </>
-        )}
-        <form data-act="ticktick_add" style={{ display: "flex", gap: 6, marginTop: 10 }}>
-          <input name="title" placeholder="new task" style={{ ...inp, flex: 1 }} />
-          <input name="project" placeholder="list (optional)" style={{ ...inp, width: 130 }} />
-          <button style={add}>+ add</button>
-        </form>
-      </div>
-
-      {/* REMINDERS */}
-      <div style={box}>
-        <div style={chip}>reminders ({d.reminders.length})</div>
-        {(d.reminders as any[]).map((r) => (
-          <div key={r.id} style={row}>
-            <span>{r.title} · {new Date(r.due_at).toLocaleString()}{r.recurrence ? ` (${r.recurrence})` : ""}{r.location ? ` @ ${r.location}` : ""}</span>
-            <button style={del} data-del="reminder" data-id={r.id}>cancel</button>
-          </div>
-        ))}
-        <form data-act="add_reminder" style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-          <input name="title" placeholder="remind me to…" style={{ ...inp, flex: 1, minWidth: 140 }} />
-          <input name="due_at" type="datetime-local" style={{ ...inp, width: 190 }} />
-          <input name="location" placeholder="location (optional)" style={{ ...inp, width: 150 }} />
-          <button style={add}>+ add</button>
-        </form>
-      </div>
-
-      {/* COMMITMENTS */}
-      <div style={box}>
-        <div style={chip}>commitments — what you said you'd do ({d.commitments.length})</div>
-        {(d.commitments as any[]).map((c) => (
-          <div key={c.id} style={row}>
-            <span>
-              {c.what}
-              <span style={{ fontSize: 11, color: c.status === "kept" ? "#5fd08a" : c.status === "missed" ? "#e0708f" : "#8b8b99", marginLeft: 6 }}>· {c.status}</span>
-            </span>
-            <span style={{ display: "flex", gap: 6 }}>
-              {c.status === "open" || c.status === "nudged" ? (
-                <>
-                  <button style={add} data-do={JSON.stringify({ action: "resolve_commitment", id: c.id, status: "kept" })}>kept</button>
-                  <button style={del} data-do={JSON.stringify({ action: "resolve_commitment", id: c.id, status: "missed" })}>missed</button>
-                </>
-              ) : null}
-              <button style={del} data-del="commitment" data-id={c.id}>del</button>
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* PLACES */}
-      <div style={box}>
-        <div style={chip}>places ({d.places.length})</div>
-        {(d.places as any[]).map((p) => (
-          <div key={p.id} style={row}>
-            <span><b>{p.name}</b> — {p.address}</span>
-            <button style={del} data-del="place" data-id={p.id}>del</button>
-          </div>
-        ))}
-        <form data-act="add_place" style={{ display: "flex", gap: 6, marginTop: 10 }}>
-          <input name="name" placeholder="name (home/gym/work)" style={{ ...inp, width: 150 }} />
-          <input name="address" placeholder="address" style={{ ...inp, flex: 1 }} />
-          <button style={add}>+ add</button>
-        </form>
-      </div>
-
-      {/* reliability + recent activity */}
-      <div style={box}>
-        <div style={chip}>reliability</div>
-        {jobsDead.length ? (
-          jobsDead.slice(0, 6).map((j: any, i: number) => (
-            <div key={i} style={{ ...row, color: "#e0708f", fontSize: 13 }}>
-              <span>dead: {j.kind}</span>
-              <span style={{ color: "#8b8b99", fontSize: 11, maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.last_error}</span>
-            </div>
-          ))
-        ) : (
-          <div style={{ fontSize: 13, color: "#5fd08a", marginTop: 6 }}>✓ no dead jobs</div>
-        )}
-        <div style={{ fontSize: 11, color: "#6b6b77", marginTop: 8 }}>recent writes: {(d.audits as any[]).map((a) => `${a.action}${a.verified ? "✓" : "✗"}`).join("  ·  ") || "none yet"}</div>
-      </div>
-
-      {/* recent messages */}
-      <div style={box}>
-        <div style={chip}>recent messages</div>
-        {(d.messages as any[]).map((m, i) => (
-          <div key={i} style={{ fontSize: 13, padding: "3px 0", color: m.direction === "inbound" ? "#c7c7d1" : "#8fb0ff" }}>
-            <b style={{ color: "#6b6b77" }}>{m.direction === "inbound" ? "you" : "lexa"}:</b> {(m.body || "").slice(0, 160)}
-          </div>
-        ))}
-      </div>
-
       <script dangerouslySetInnerHTML={{ __html: DASH_JS }} />
     </main>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "ok" | "bad" }) {
+function Tier({ label, sub }: { label: string; sub: string }) {
+  return <div className="tier"><span className="tierlbl">{label}</span><span className="tiersub">{sub}</span></div>;
+}
+function Section({ title, help, count, open, children }: { title: string; help: string; count?: any; open?: boolean; children: React.ReactNode }) {
   return (
-    <div style={{ background: "#15151b", border: "1px solid #26262f", borderRadius: 10, padding: "8px 12px", minWidth: 96 }}>
-      <div style={{ fontSize: 10, color: "#8b8b99", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: tone === "bad" ? "#e0708f" : tone === "ok" ? "#5fd08a" : "#eee" }}>{value}</div>
-    </div>
+    <details className="card" open={open}>
+      <summary><span className="stitle">{title}</span>{count != null ? <span className="count">{count}</span> : null}<span className="chev">▾</span></summary>
+      <div className="help">{help}</div>
+      <div className="secbody">{children}</div>
+    </details>
   );
 }
-
-function L({ t, children }: { t: string; children: React.ReactNode }) {
-  return <label style={{ fontSize: 12, color: "#8b8b99" }}>{t}<br />{children}</label>;
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "ok" | "bad" }) {
+  return <div className="stat"><div className="statlbl">{label}</div><div className={`statval ${tone || ""}`}>{value}</div></div>;
 }
+function L({ t, children }: { t: string; children: React.ReactNode }) {
+  return <label className="lbl">{t}<br />{children}</label>;
+}
+
+const CSS = `
+:root{--bg:#0b0b0f;--card:#15151b;--bd:#26262f;--in:#0d0d12;--txt:#eee;--dim:#8b8b99;--dim2:#c7c7d1;--green:#5fd08a;--red:#e0708f;--blue:#8fb0ff;--amber:#e0b070}
+*{box-sizing:border-box}
+main{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
+.wrap{max-width:680px;margin:0 auto;padding:22px 14px 60px}
+h1{font-size:28px;margin:0 0 2px}
+.sub{color:var(--dim);margin:0 0 16px;font-size:14px}
+.stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;flex:1;min-width:90px}
+.statlbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.statval{font-size:18px;font-weight:700}
+.statval.bad{color:var(--red)}.statval.ok{color:var(--green)}
+.tier{margin:22px 0 8px;padding-left:2px}
+.tierlbl{font-size:12px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.6px}
+.tiersub{display:block;font-size:12px;color:var(--dim);margin-top:1px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:2px 14px;margin-bottom:10px}
+summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:12px 0;font-size:16px;font-weight:600}
+summary::-webkit-details-marker{display:none}
+.stitle{flex:1}
+.count{font-size:12px;color:var(--dim);background:#0d0d12;border:1px solid var(--bd);border-radius:20px;padding:1px 9px}
+.chev{color:var(--dim);font-size:12px;transition:transform .15s}
+details[open] .chev{transform:rotate(180deg)}
+.help{font-size:12.5px;color:var(--dim);margin:-2px 0 10px;line-height:1.45}
+.secbody{padding-bottom:14px}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #1c1c24;font-size:14px}
+.row.col{align-items:flex-start}
+.row.sm{font-size:13px}
+.actions{display:flex;gap:6px;flex-shrink:0}
+.grow{flex:1;min-width:0}
+.frm{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.mt{margin-top:12px}.mt6{margin-top:6px}
+.in,.ta{background:var(--in);border:1px solid var(--bd);color:var(--txt);border-radius:8px;padding:10px;font-size:16px;width:100%;font-family:inherit}
+.in{min-width:110px}
+.ta{resize:vertical;line-height:1.5}
+.btn{border-radius:8px;padding:8px 12px;cursor:pointer;font-size:14px;border:1px solid;background:transparent;font-family:inherit}
+.btn.sm{padding:5px 9px;font-size:12px}
+.btn.add{border-color:#254a3a;color:var(--green)}
+.btn.del{border-color:#3a2530;color:var(--red)}
+.btn.do{border-color:#2f3550;color:var(--blue)}
+.btn.wide{width:100%;padding:11px}
+.fkey{color:var(--dim);font-size:13px;white-space:nowrap}
+.catgrp{margin-top:10px}
+.catname{font-size:12px;color:var(--blue);font-weight:600;margin-bottom:2px}
+.dim{color:var(--dim);font-size:12px}
+.dim2{color:var(--dim2);font-size:12.5px;margin-top:3px;line-height:1.4}
+.ell{max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:10px;border-radius:5px;padding:1px 6px;margin-left:6px}
+.tag.amber{color:var(--amber)}.tag.muted{color:var(--dim)}.tag.green{color:var(--green)}.tag.red{color:var(--red)}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.lbl{font-size:12px;color:var(--dim)}
+.ckrow{grid-column:1/-1;font-size:13px;display:flex;align-items:center;gap:8px;color:var(--dim2)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-size:13px;padding:5px 11px;border-radius:20px;display:inline-flex;gap:6px;align-items:center}
+.chip.on{background:#16301f;color:var(--green)}.chip.off{background:#2a1a1a;color:#d08a5f}
+.connect{color:var(--blue);text-decoration:underline}
+.builder .tools{margin-top:10px}
+.toolgrp{margin-bottom:7px;line-height:1.9}
+.toolgroupname{font-size:11px;color:#6b6b77;display:inline-block;width:92px;vertical-align:top}
+.tk{font-size:12.5px;margin-right:10px;color:var(--dim2);white-space:nowrap}
+.grouplbl{font-size:12px;margin-top:10px}.grouplbl.red{color:var(--red)}.grouplbl.blue{color:var(--blue)}
+.warn{font-size:13px;color:#d08a5f;margin-top:8px}
+.ok{font-size:13px;color:var(--green);margin-top:6px}
+.blue{color:var(--blue)}
+.msgs .msg{font-size:13px;padding:3px 0}.msg .you{color:#6b6b77}.msg .her{color:var(--blue)}
+@media(max-width:520px){.grid3{grid-template-columns:1fr 1fr}.stat{min-width:calc(50% - 4px)}.in{font-size:16px}}
+`;
 
 const DASH_JS = `
 async function post(body){const r=await fetch('/api/dashboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok){const e=await r.json().catch(()=>({}));alert('error: '+(e.error||r.status));}return r.ok;}
 document.addEventListener('click', async (e)=>{
-  const del = e.target.closest('[data-del]');
-  if(del){ e.preventDefault(); if(!confirm('remove this?'))return; if(await post({action:'delete',kind:del.dataset.del,id:del.dataset.id}))location.reload(); return; }
-  const doo = e.target.closest('[data-do]');
-  if(doo){ e.preventDefault(); const p=JSON.parse(doo.dataset.do); if(await post(p))location.reload(); return; }
+  const del=e.target.closest('[data-del]'); if(del){ e.preventDefault(); if(!confirm('remove this?'))return; if(await post({action:'delete',kind:del.dataset.del,id:del.dataset.id}))location.reload(); return; }
+  const doo=e.target.closest('[data-do]'); if(doo){ e.preventDefault(); if(await post(JSON.parse(doo.dataset.do)))location.reload(); return; }
 });
 document.addEventListener('submit', async (e)=>{
-  const f = e.target.closest('form[data-act]'); if(!f) return; e.preventDefault();
-  const fd = new FormData(f); const data = {action:f.dataset.act};
-  for(const [k,v] of fd.entries()){ if(data[k]===undefined) data[k]=v; else { if(!Array.isArray(data[k])) data[k]=[data[k]]; data[k].push(v); } }
-  if(await post(data)) location.reload();
+  const f=e.target.closest('form[data-act]'); if(!f)return; e.preventDefault();
+  const fd=new FormData(f); const data={action:f.dataset.act};
+  for(const [k,v] of fd.entries()){ if(data[k]===undefined)data[k]=v; else{ if(!Array.isArray(data[k]))data[k]=[data[k]]; data[k].push(v);} }
+  if(await post(data))location.reload();
 });
 `;

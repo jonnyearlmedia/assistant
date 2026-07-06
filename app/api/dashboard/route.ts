@@ -132,6 +132,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: r.ok, detail: r.detail });
       }
 
+      // ---- custom instructions (jonny's own standing rules, folded into her brain) ----
+      case "set_instructions": {
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const settings = { ...((user?.settings as any) || {}), custom_instructions: String(body.instructions || "").slice(0, 4000) };
+        await db.from("users").update({ settings }).eq("id", uid);
+        return NextResponse.json({ ok: true });
+      }
+
       // ---- settings ----
       case "set_settings": {
         const { data: user } = await db.from("users").select("settings").eq("id", uid).single();

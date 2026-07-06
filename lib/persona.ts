@@ -153,6 +153,7 @@ export function buildSystemPrompt(
     name?: string;
     timezone?: string;
     now?: string;
+    instructions?: string;
     facts?: string;
     goals?: string;
     playbooks?: string;
@@ -168,8 +169,9 @@ export function buildSystemPrompt(
     { type: "text", text: [LEXA_IDENTITY, LEXA_PILLARS, LEXA_BEHAVIOR].join("\n"), ...marker },
   ];
 
-  // 2) memory — only changes when facts/goals/playbooks change
+  // 2) memory — only changes when facts/goals/playbooks/instructions change
   const memory = [
+    ctx.instructions ? `## jonny's standing instructions (his own words — follow these above your defaults)\n${ctx.instructions}` : "",
     ctx.facts ? `\n## what you know about him\n${ctx.facts}` : "",
     ctx.goals ? `\n## his active goals\n${ctx.goals}` : "",
     ctx.playbooks ? `\n## your saved playbooks (run these exactly)\n${ctx.playbooks}` : "",

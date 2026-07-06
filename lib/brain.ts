@@ -71,6 +71,7 @@ export async function think(
     timezone: user.timezone,
     now: new Date().toLocaleString("en-US", { timeZone: user.timezone }),
     onboardingStage: user.onboarding_stage,
+    instructions: (user.settings as any)?.custom_instructions || undefined,
     facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
     goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
     playbooks: playbooks
@@ -179,6 +180,7 @@ export async function composeProactive(
       timezone: user.timezone,
       now: new Date().toLocaleString("en-US", { timeZone: user.timezone }),
       onboardingStage: user.onboarding_stage,
+      instructions: (user.settings as any)?.custom_instructions || undefined,
       facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
       goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
       playbooks: playbooks.map((p) => `- ${p.name}: ${p.instructions}`).join("\n"),
