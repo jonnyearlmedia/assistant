@@ -1,7 +1,7 @@
 // the heartbeat. Vercel Cron (or an external pinger) hits this; it runs the proactive engine:
 // due reminders + leave-now, morning briefs, and the learning/accountability check-in.
 import { NextRequest, NextResponse } from "next/server";
-import { runTick } from "@/lib/proactive";
+import { runTick, runDailyBrief, proactiveCheckin } from "@/lib/proactive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +18,9 @@ function authorized(req: NextRequest): boolean {
 
 async function handle(req: NextRequest) {
   if (!authorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const force = req.nextUrl.searchParams.get("force");
+  if (force === "brief") return NextResponse.json({ ok: true, forced: "brief", sent: await runDailyBrief(true) });
+  if (force === "checkin") return NextResponse.json({ ok: true, forced: "checkin", sent: await proactiveCheckin(true) });
   const result = await runTick();
   return NextResponse.json({ ok: true, at: new Date().toISOString(), result });
 }

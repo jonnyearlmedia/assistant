@@ -83,23 +83,26 @@ export async function dispatchDueReminders(): Promise<number> {
 }
 
 // 2) morning brief — once/day at the user's brief hour
-export async function runDailyBrief(): Promise<number> {
+export async function runDailyBrief(force = false): Promise<number> {
   let sent = 0;
   for (const user of await allUsers()) {
     const tz = user.timezone || "America/New_York";
     const { hour, date } = nowParts(tz);
     const briefHour = (user.settings as any)?.brief_hour ?? 8;
-    if (hour !== briefHour) continue;
-    if ((user.settings as any)?.last_brief === date) continue;
+    if (!force && hour !== briefHour) continue;
+    if (!force && (user.settings as any)?.last_brief === date) continue;
 
     let ctx = "";
     try {
-      const tt = await ticktick.listTasks("today");
-      if (tt.ok && tt.tasks?.length)
-        ctx +=
-          "TODAY / SOON (TickTick — source of truth):\n" +
-          tt.tasks.map((x: any) => `- ${x.title}${x.due ? ` @ ${x.due}` : ""} (${x.project})`).join("\n") +
-          "\n";
+      const tt: any = await ticktick.listTasks("today");
+      if (tt.ok) {
+        if (tt.dated?.length)
+          ctx += "TODAY (TickTick):\n" + tt.dated.map((x: any) => `- ${x.title} @ ${x.due} (${x.project})`).join("\n") + "\n";
+        if (tt.overdue?.length)
+          ctx += `\nOVERDUE (${tt.counts.overdue}):\n` + tt.overdue.slice(0, 6).map((x: any) => `- ${x.title} (was due ${x.due})`).join("\n") + "\n";
+        if (tt.counts?.undated)
+          ctx += `\nUNDATED backlog: ${tt.counts.undated} tasks across ${Object.keys(tt.undated_by_project || {}).join(", ")}\n`;
+      }
     } catch {}
     try {
       const mp = await notion.listMasterPlanner(8);
@@ -136,14 +139,14 @@ export async function runDailyBrief(): Promise<number> {
 }
 
 // 3) first-days learning + accountability check-in — once/day at the user's check-in hour
-export async function proactiveCheckin(): Promise<number> {
+export async function proactiveCheckin(force = false): Promise<number> {
   let sent = 0;
   for (const user of await allUsers()) {
     const tz = user.timezone || "America/New_York";
     const { hour, date } = nowParts(tz);
     const checkinHour = (user.settings as any)?.checkin_hour ?? 19;
-    if (hour !== checkinHour) continue;
-    if ((user.settings as any)?.last_checkin === date) continue;
+    if (!force && hour !== checkinHour) continue;
+    if (!force && (user.settings as any)?.last_checkin === date) continue;
 
     const facts = await mem.listFacts(user.id);
     const situation =

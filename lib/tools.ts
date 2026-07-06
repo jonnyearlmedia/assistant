@@ -120,7 +120,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "ticktick_list",
     description:
-      "READ jonny's existing tasks/schedule from TickTick (his source of truth). scope: 'today' | 'week' | 'all'. Use for 'what's on my schedule', 'what do i have today/this week', or before planning. Returns title, due, priority, list.",
+      "READ jonny's TickTick (source of truth). scope: today|week|all. Returns dated tasks in the window, OVERDUE tasks, and UNDATED tasks grouped by project — he keeps MOST of his tasks undated inside projects (Work, School, Fitness, etc.). CRITICAL: if nothing is dated this week, do NOT say 'nothing' — surface his overdue + undated backlog by project so he's never flying blind. Always give him the real picture of his plate.",
     input_schema: { type: "object", properties: { scope: { type: "string", description: "today | week | all" } } },
   },
   {

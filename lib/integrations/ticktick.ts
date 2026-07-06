@@ -98,14 +98,34 @@ export async function listTasks(
     }
   }
 
-  let tasks = all.filter((x) => x.status !== "done");
+  const active = all.filter((x) => x.status !== "done");
+  const now = new Date();
+  const dated = active.filter((x) => x.due);
+  const undated = active.filter((x) => !x.due);
+  const overdue = dated.filter((x) => new Date(x.due) < now).sort((a, b) => a.due.localeCompare(b.due));
+
+  let inWindow = dated;
   if (scope === "today" || scope === "week") {
     const end = new Date();
     end.setDate(end.getDate() + (scope === "today" ? 1 : 7));
-    tasks = tasks.filter((x) => x.due && new Date(x.due) <= end);
+    inWindow = dated.filter((x) => new Date(x.due) <= end);
   }
-  tasks.sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
-  return { ok: true, tasks, detail: `${tasks.length} task(s) across ${(projects || []).length} lists` };
+  inWindow.sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+
+  // group undated by project so she can say "you've got X in Work, Y in School"
+  const byProject: Record<string, number> = {};
+  for (const t of undated) byProject[t.project] = (byProject[t.project] || 0) + 1;
+
+  return {
+    ok: true,
+    scope,
+    dated: inWindow,
+    overdue: overdue.slice(0, 15),
+    undated_sample: undated.slice(0, 20),
+    undated_by_project: byProject,
+    counts: { dated_in_window: inWindow.length, overdue: overdue.length, undated: undated.length, active_total: active.length },
+    detail: `${inWindow.length} dated in window · ${overdue.length} overdue · ${undated.length} undated · ${active.length} active total`,
+  };
 }
 
 export async function createTask(f: {
