@@ -41,6 +41,14 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   cache hits and compute spend. `composeProactive` is intentionally uncached (no tools in prefix).
 
 **Proactive engine** (`/api/cron/tick`, driven by GitHub 15-min pinger + daily Vercel cron)
+- ⚠️ HISTORY (2026-07-06): the engine was DEAD until this date — the 15-min GitHub cron only runs
+  from `main`, and the code only reached `main` the morning of 07-06. First real brief sent 07-06.
+  Three bugs found+fixed in the shakeout: (1) composeProactive could burn its whole max_tokens on
+  adaptive thinking and text a bare "…" — thinking now disabled there, budgets raised; (2) TickTick
+  reads dropped `startDate`, so time blocks were reported by their END time — start/isAllDay now
+  exposed and briefs render "from X until Y"; (3) 8 duplicate past-event tasks deleted from TickTick.
+  Watch: GitHub cron is best-effort — if ticks prove flaky, move to Supabase pg_cron hitting the
+  tick URL (needs the Vercel bypass secret from jonny once).
 - Due reminders + "leave now" (with drive time)
 - Morning brief (TickTick + Notion + Calendar + unread email)
 - First-days learning + evening check-in
