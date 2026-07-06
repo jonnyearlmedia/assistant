@@ -100,16 +100,20 @@ create table if not exists messages (
 );
 
 -- outbound job queue with retries + dead-letter. this is what kills Tomo's flaky delivery.
+-- driven by lib/queue.ts: work is claimed atomically, failures retry with exponential backoff,
+-- exhausted jobs land in 'dead' (kept, inspectable). dedupe_key gives exactly-once semantics
+-- for per-day work (morning_brief / checkin / automation) and the runTick lease.
 create table if not exists jobs (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid references users(id) on delete cascade,
-  kind        text not null,                       -- send_message | morning_brief | reminder | learn_tick
+  kind        text not null,                       -- send_message | morning_brief | checkin | automation | tick_lease
   run_at      timestamptz not null default now(),
   payload     jsonb not null default '{}',
   status      text not null default 'pending',     -- pending | running | done | failed | dead
   attempts    int not null default 0,
   max_attempts int not null default 5,
   last_error  text,
+  dedupe_key  text,                                -- unique when set: at most one job ever per key
   created_at  timestamptz not null default now()
 );
 
@@ -145,6 +149,8 @@ create table if not exists write_audits (
 create index if not exists idx_facts_user on facts(user_id);
 create index if not exists idx_reminders_due on reminders(status, due_at);
 create index if not exists idx_jobs_runnable on jobs(status, run_at);
+create unique index if not exists idx_jobs_dedupe on jobs(dedupe_key);
+create index if not exists idx_jobs_kind_status on jobs(kind, status);
 create index if not exists idx_messages_user_time on messages(user_id, created_at desc);
 create index if not exists idx_behavior_user on behavior_log(user_id, created_at desc);
 

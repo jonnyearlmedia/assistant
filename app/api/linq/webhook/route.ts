@@ -2,20 +2,16 @@
 // (debounce) so rapid-fire messages get coalesced into one coherent reply instead of stumbling.
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
-import { verifyLinq, parseInbound, sendMessage, startTyping, markRead, InboundMessage } from "@/lib/linq";
+import { verifyLinq, parseInbound, markRead, InboundMessage } from "@/lib/linq";
 import { resolveUser, User, db } from "@/lib/db";
 import { think } from "@/lib/brain";
+import { sendBubbles } from "@/lib/send";
 import * as mem from "@/lib/memory";
 
 export const runtime = "nodejs";
 
 // how long lexa waits for silence before replying. each new text resets it (they're spamming a thought).
 const SETTLE_MS = Number(process.env.SETTLE_MS || 6000);
-
-// human-ish "typing" pause before a bubble — scales with length but never as slow as real typing
-function typingDelay(text: string): number {
-  return Math.min(1100 + text.length * 33, 4200); // ~1.1s short → ~4.2s cap
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -34,24 +30,8 @@ async function replyAfterSettle(user: User, from: string, chatId: string | undef
 
     const reply = await think(user, combined, media, { historyBefore: earliest });
 
-    let bubbles = reply
-      .split(/\n\s*\n+/)
-      .map((b) => b.trim())
-      .filter(Boolean)
-      .slice(0, 6);
-    if (bubbles.length === 0) bubbles = [reply.trim() || "…"];
-
-    for (let i = 0; i < bubbles.length; i++) {
-      // show the typing bubble, pause like she's actually typing, then send (send auto-clears typing)
-      await startTyping(chatId);
-      await sleep(typingDelay(bubbles[i]));
-      const sent = await sendMessage(from, bubbles[i]);
-      await mem.logMessage(user.id, "outbound", bubbles[i], {
-        linq_message_id: sent.messageId,
-        status: sent.ok ? "sent" : "failed",
-      });
-      if (!sent.ok) console.error("[lexa] send failed:", sent.error);
-    }
+    // durable: if every bubble fails to send, the reply is queued and retried on the next tick
+    await sendBubbles(user.id, from, chatId, reply, { durable: true });
   } catch (e: any) {
     console.error("[lexa] settle handler error:", e?.message || e);
   }
@@ -112,5 +92,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "start-times-v4" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "durable-queue-v5" });
 }

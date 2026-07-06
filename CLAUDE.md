@@ -45,7 +45,7 @@ real phone number and she replies, remembers, acts on his tools, and reaches out
 ```
 app/
   api/linq/webhook/route.ts   inbound texts: verify → debounce (waitUntil) → think → bubble replies
-  api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin to fire on demand
+  api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin|jobs to fire on demand
   api/connect/{ticktick,google,google2}[/callback]/route.ts   OAuth connect flows
   api/dashboard/route.ts      dashboard mutations (owner-only via Vercel Auth)
   dashboard/page.tsx          memory dashboard (view/edit facts, goals, playbooks, reminders, settings)
@@ -57,8 +57,13 @@ lib/
   memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, places, message log, debounce)
   db.ts           lazy Supabase client + resolveUser + User type
   linq.ts         Linq transport: sendMessage, startTyping, markRead, verifyLinq, parseInbound, fetchMedia/TextAttachment
-  send.ts         shared "text like a person" bubble sender (split + typing + human delay)
-  proactive.ts    dispatchDueReminders, runDailyBrief, proactiveCheckin, runAutomations, runTick
+  send.ts         shared "text like a person" bubble sender (split + typing + human delay); durable:true
+                  re-enqueues a totally-failed send on the job queue for next-tick retry
+  queue.ts        durable job queue on the jobs table: atomic claim, retry w/ exponential backoff,
+                  dead-letter, dedupe_key exactly-once, tick lease, stuck-job reaper, prune
+  audit.ts        auditWrite() → write_audits ledger (fire-and-forget receipt for every external write)
+  proactive.ts    dispatchDueReminders, runDailyBrief, proactiveCheckin, runAutomations, JOB_HANDLERS, runTick
+                  (once-a-day work goes through the queue with per-user-per-day dedupe keys)
   integrations/
     tokens.ts     owner resolution + OAuth token storage (integrations table)
     ticktick.ts   OAuth + full CRUD (create/list/complete/update-move/delete) verified read-back
@@ -106,6 +111,9 @@ or from jonny — they are intentionally NOT committed. Most dev needs only git 
    - Health/rev marker: `GET /api/linq/webhook` returns `{rev: "..."}` — bump the `rev` string in that
      route on a deploy so you can confirm the new build is live.
    - Fire proactive on demand: `GET /api/cron/tick?force=brief` (or `force=checkin`) with the bypass + key.
+     `?force=jobs` drains the job queue immediately (bypasses the tick lease) — use it to verify retries.
+   - Inspect reliability: `jobs` table (status `dead` = failed after all retries — inspect, don't delete;
+     `pending` with `last_error` = mid-backoff), `write_audits` (one row per external write, verified flag).
    - Inspect behavior: query the Supabase `messages` table (via the Supabase MCP) to see what she
      actually sent — do this instead of assuming a reply worked.
    - Simulate an inbound: POST a `message.received` payload to the webhook (see `parseInbound` shape).

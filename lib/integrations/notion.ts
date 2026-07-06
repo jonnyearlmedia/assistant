@@ -1,5 +1,6 @@
 // Notion client (standalone integration token). VERIFIED WRITES: every write is read back
 // and confirmed before we report success — lexa never claims a phantom log.
+import { auditWrite } from "../audit";
 
 const NOTION = "https://api.notion.com/v1";
 const VER = "2022-06-28";
@@ -17,6 +18,10 @@ function headers() {
 export function notionConnected(): boolean {
   return !!process.env.NOTION_TOKEN;
 }
+
+// compact requested-fields snapshot for the audit ledger (never full page content)
+const compactReq = (o: Record<string, any>) =>
+  Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v]));
 
 export interface TaskFields {
   task: string;
@@ -59,7 +64,11 @@ export async function createMasterPlannerTask(
     body: JSON.stringify({ parent: { database_id: MASTER_PLANNER_DB }, properties: props }),
   });
   const data = await res.json();
-  if (!res.ok) return { ok: false, verified: false, detail: `notion create failed: ${data?.message || res.status}` };
+  if (!res.ok) {
+    const detail = `notion create failed: ${data?.message || res.status}`;
+    auditWrite("notion", "create_master_planner_task", { requested: compactReq({ task: f.task, due: f.due, project: f.project, status: f.status }), verified: false, detail });
+    return { ok: false, verified: false, detail };
+  }
 
   // VERIFIED read-back
   const id = data.id;
@@ -67,14 +76,11 @@ export async function createMasterPlannerTask(
   const cd = await check.json();
   const title = cd?.properties?.Task?.title?.map((t: any) => t.plain_text).join("") || "";
   const verified = check.ok && cd?.id === id && title === f.task;
-  return {
-    ok: true,
-    id,
-    verified,
-    detail: verified
-      ? `created & verified in Master Planner: "${title}"${f.due ? ` (due ${f.due})` : ""}`
-      : "created but read-back could not confirm — flag this, don't claim done",
-  };
+  const detail = verified
+    ? `created & verified in Master Planner: "${title}"${f.due ? ` (due ${f.due})` : ""}`
+    : "created but read-back could not confirm — flag this, don't claim done";
+  auditWrite("notion", "create_master_planner_task", { targetRef: id, requested: compactReq({ task: f.task, due: f.due, project: f.project, status: f.status }), verified, detail });
+  return { ok: true, id, verified, detail };
 }
 
 function titleOf(r: any): string {
@@ -183,14 +189,15 @@ export async function createPageInDb(
     body: JSON.stringify({ parent: { database_id: dbId }, properties: props }),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, verified: false, detail: `notion create failed: ${d?.message || res.status}` };
+  if (!res.ok) {
+    const detail = `notion create failed: ${d?.message || res.status}`;
+    auditWrite("notion", "create_page", { targetRef: dbId, requested: compactReq(fields), verified: false, detail });
+    return { ok: false, verified: false, detail };
+  }
   const check = await fetch(`${NOTION}/pages/${d.id}`, { headers: headers() });
-  return {
-    ok: true,
-    id: d.id,
-    verified: check.ok,
-    detail: `created & ${check.ok ? "verified" : "UNVERIFIED"} row in db${skipped.length ? ` (ignored unknown fields: ${skipped.join(", ")})` : ""}`,
-  };
+  const detail = `created & ${check.ok ? "verified" : "UNVERIFIED"} row in db${skipped.length ? ` (ignored unknown fields: ${skipped.join(", ")})` : ""}`;
+  auditWrite("notion", "create_page", { targetRef: d.id, requested: compactReq(fields), verified: check.ok, detail });
+  return { ok: true, id: d.id, verified: check.ok, detail };
 }
 
 // append text content to any notion page
@@ -207,8 +214,17 @@ export async function appendText(pageId: string, text: string): Promise<{ ok: bo
     body: JSON.stringify({ children }),
   });
   const d = await res.json();
-  if (!res.ok) return { ok: false, detail: `append failed: ${d?.message || res.status}` };
-  return { ok: true, detail: `appended ${children.length} block(s)` };
+  if (!res.ok) {
+    const detail = `append failed: ${d?.message || res.status}`;
+    auditWrite("notion", "append_blocks", { targetRef: pageId, requested: { preview: (text || "").slice(0, 200), blocks: children.length }, verified: false, detail });
+    return { ok: false, detail };
+  }
+  // cheap read-back: fetch the first appended block by the id notion returned
+  const firstId = d?.results?.[0]?.id;
+  const check = firstId ? await fetch(`${NOTION}/blocks/${firstId}`, { headers: headers() }) : null;
+  const detail = `appended ${children.length} block(s)`;
+  auditWrite("notion", "append_blocks", { targetRef: pageId, requested: { preview: (text || "").slice(0, 200), blocks: children.length }, verified: !!check?.ok, detail });
+  return { ok: true, detail };
 }
 
 export async function listMasterPlanner(limit = 12): Promise<{ ok: boolean; tasks?: any[]; detail?: string }> {
