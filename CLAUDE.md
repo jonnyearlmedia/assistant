@@ -77,8 +77,10 @@ vercel.json       framework=nextjs + daily cron (0 15 * * * = 8am Pacific)
   project id `prj_3R1LVrivwGd4Uc85dojUPxWbzLt0`. Deployment Protection is ON (all `.vercel.app` URLs),
   so webhook/cron URLs carry a `?x-vercel-protection-bypass=<secret>` query param.
 - **Supabase:** project ref `tucemplfksloosrnhywt` (org `jonny-os`). Tables in `db/schema.sql`.
-- **Linq:** phone line `+1 321-297-3385`. Webhook subscription id `c07d6aed-aa28-4b18-a5dc-9762f1654099`
-  (events: `message.received`; the target URL includes the Vercel bypass secret).
+- **Linq:** phone line `+1 321-297-3385`. Webhook subscription id `f56bb81a-b64f-45ba-a4b2-acc1ec502571`
+  (events: `message.received`; target = the **production** webhook URL `text-assistant-jonny-3061s-projects.vercel.app/api/linq/webhook`
+  incl. the Vercel bypass secret). The old branch-preview subscription was deleted, so no code lives on a
+  feature-branch URL anymore — everything runs off the production deployment of `main`.
 - **Owner (jonny's cell):** `+1 707-319-8190`. Timezone: `America/Los_Angeles`.
 
 ## Secrets (names only — VALUES live in Vercel env, never in this repo)
