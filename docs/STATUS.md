@@ -89,6 +89,16 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   "couldn't open it" path (nothing breaks). Swap provider (OpenAI/Groq Whisper) is a ~10-line edit.
 - **Group chats** (Linq supports them; single-recipient today)
 
+**Subagents / capability fleet** (`lib/subagents.ts`)
+- Orchestrator + specialists: the main brain uses the `delegate` tool to hand a focused sub-task to a
+  worker scoped to ONE domain's tools (email / calendar / notion / tasks / research / memory) with a tight
+  brief; it verifies its own writes and returns a short result. Keeps the main context lean and lets her
+  fan out across independent domains. Main brain still has all tools for simple one-step work.
+- **research** = web search (Anthropic server tool `web_search_20260209`, in `TOOLS` + the research domain).
+- **memory_query** = `recall` tool → `searchMemory()` over the full messages table + facts (not just the
+  ~20-msg window). Tradeoff: each delegated specialist is another model call (a bit more latency on complex
+  tasks) in exchange for focus + parallelism + context hygiene.
+
 ## 🗺️ Recommended roadmap (priority order)
 
 1. ~~**Prompt caching**~~ — ✅ DONE (see Cost/observability above).

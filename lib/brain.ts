@@ -127,6 +127,13 @@ export async function think(
       .join("");
     if (text) reply = text;
 
+    // server tools (web search) run inside the API call. if its server loop pauses mid-work,
+    // stop_reason is "pause_turn" — echo the content back and continue so it can finish.
+    if (res.stop_reason === "pause_turn") {
+      messages.push({ role: "assistant", content: res.content });
+      continue;
+    }
+
     const toolUses = res.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
     );
