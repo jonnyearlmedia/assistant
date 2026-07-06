@@ -63,21 +63,97 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - **Voice-note transcription** (if Linq delivers audio parts)
 - **Group chats** (Linq supports them; single-recipient today)
 
-## 🗺️ Recommended roadmap (priority order)
+## 🚨 ASAP / core reliability backlog
 
+These are the only items that should interrupt normal "teach lexa new workflows" work. They protect
+the core promise and operating cost.
+
+1. **Verified-write audit + fixes** — audit every external write path and make sure it reads back or
+   otherwise confirms the real external record before returning success. Start with:
+   - `lib/integrations/ticktick.ts`: `completeTask`, `deleteTask`, `updateTask`
+   - `lib/integrations/google.ts`: `gmailSend`, `gmailDraft`, `calendarUpdate`, `calendarDelete`
+   - `lib/integrations/notion.ts`: `appendText`, generic create/read-back detail
+   - `lib/tools.ts`: make tool results honestly expose `verified:false` or failure when read-back fails
+   Acceptance: lexa never says "done" for TickTick/Notion/Gmail/Calendar writes unless the integration
+   read-back/verification step proves it landed. If verification is impossible for an API action,
+   return that explicitly and phrase the user reply as unverified.
+2. **Spend/cache visibility** — build a tiny dashboard/API readout from `usage_log` for daily tokens,
+   estimated spend, cache hit rate, and recent `cache_read`/`cache_write` values. Acceptance:
+   jonny can quickly see whether prompt caching is warm (`cache_read` ~7k+ on repeated `think()` calls)
+   and whether any change has unexpectedly raised cost.
+
+Cache warning for agents: do not casually edit `lib/persona.ts`, `TOOLS` order/schemas in `lib/tools.ts`,
+or the system/message cache structure in `lib/brain.ts` while doing these items. Changes before cache
+breakpoints can invalidate Anthropic prompt caching and multiply costs.
+
+## 🗺️ Agent to-do backlog / recommended roadmap
+
+Use this as the general backlog for Codex/Claude sessions. Security cleanup is intentionally not
+included here for now per jonny; keep the security notes below separate.
+
+### Need / core
 1. ~~**Prompt caching**~~ — ✅ DONE (see Cost/observability above). Follow-on: consider Haiku for
-   simple turns (design around the cache — caches are per-model, so route whole turns, not mid-loop).
-2. **Spend awareness / cap** — `usage_log` table already records per-call tokens; build on it:
-   cost rollups, warn jonny, optional monthly ceiling.
-3. **Behavioral adaptation (wire it up)** — use `behavior_log` to learn jonny's procrastination pattern
-   and nudge earlier for tasks he tends to skip. Highest-value "for him" feature.
-4. **Commitment follow-through** — detect "I'll do X later" in chat, store it, follow up proactively.
-5. **Weekly review** — Sunday-night automation: what got done/slipped, plan the week from TickTick/Notion.
-6. **Time-block the backlog** — proactively propose dates/calendar blocks for his pile of undated TickTick tasks.
-7. **Vision workflows** — food pic → macros into Notion; screenshot → extract event/task → set it.
-8. **Tone tuning** — jonny wasn't sold on heavy gen-z. Options offered: clean&natural / warm&hype /
-   dry&minimal / sharp-no-BS coach. Awaiting his pick; then retune `lib/persona.ts`.
-9. Voice notes, group chats, Calendly/Box — as desired.
+   simple turns only if the routing design preserves cache economics; caches are per-model, so route
+   whole turns, not mid-loop.
+2. **Verified-write reliability** — keep this as priority zero whenever touching integrations. Every
+   external write should read back or otherwise verify the real record before lexa says it is done.
+   See the ASAP backlog above for concrete audit targets.
+3. **Cost + cache dashboard** — `usage_log` already records per-call tokens; build a small dashboard/API
+   view for daily spend, cache hit rate, warm/cold calls, and warnings if `cache_read` drops unexpectedly.
+4. **Better failure visibility** — add an operator-facing view/log for failed proactive sends, cron/tick
+   misses, integration write failures, Supabase errors, and recent tool-call failures. Goal: fewer silent
+   weird states when lexa appears to have gone quiet.
+
+### Highest-value features
+1. **Commitment follow-through** — detect "I'll do X later" / "remind me to actually..." / soft promises
+   in chat, store them, and follow up proactively. This is core to the accountability-homie product.
+2. **Behavior-aware nudges** — wire `behavior_log` into reminder timing so lexa learns patterns like
+   "jonny skips gym when nudged at night" and moves nudges earlier or changes framing.
+3. **Scheduler manual execution** — Jonny's attached scheduler manuals were imported into live Supabase
+   memory on 2026-07-06 as pinned facts, saved places, and 9 active playbooks (`scheduler_*`,
+   `ticktick_project_routing`, `daily_routine_guardrails`, `travel_and_event_blocks`,
+   `school_math_182_assignments`, `vph_client_workflow`, `completion_and_cleanup_rules`). Next step:
+   make the tools/dashboard fully support editing and executing those rules.
+4. **Weekly review** — Sunday-night recap: what got done, what slipped, what's coming, what should move
+   into TickTick/Notion, and one concrete plan for the week.
+5. **Backlog time-blocking** — read TickTick/Notion backlog and propose calendar blocks or dated TickTick
+   tasks for undated work instead of letting the backlog sit as a pile.
+6. **Tone tuning** — pick the durable lexa voice and update carefully. Options previously discussed:
+   clean&natural / warm&hype / dry&minimal / sharp-no-BS coach. Because persona text is cache-sensitive,
+   flag cache impact before editing `lib/persona.ts`.
+
+### Likely nice-to-have features
+1. **Screenshot → task/event extraction** — parse screenshots into tasks, calendar events, or Notion logs
+   and ask for confirmation before writing.
+2. **Food/health vision workflows** — food photo → macros/meal note/mood or health log into Notion using
+   the learned tracker schema.
+3. **Voice notes** — if Linq delivers audio parts, transcribe and route the content through the normal
+   tool loop so voice messages can create tasks, notes, reminders, or summaries.
+4. **Memory/playbook transparency** — improve "what are you tracking about me?" and dashboard cleanup so
+   jonny can quickly inspect, edit, or delete facts/playbooks without code.
+5. **Better memory/playbook editor** — make teaching lexa workflows easier: structured playbook editor,
+   target selection, test-run button, and clear active/inactive controls.
+6. **Group chats** — add when jonny wants lexa involved with other people; lower priority than private
+   accountability unless a real use case appears.
+7. **Calendly / Box** — build only if they become part of jonny's actual daily workflow; accounts may be
+   connected, but they are not worth prioritizing over accountability features yet.
+
+### Build / infrastructure improvements
+1. **Richer TickTick task fields** — the imported scheduler manual expects scheduled tasks with `projectId`,
+   `startDate`, `dueDate`, `timeZone`, `isAllDay`, rich `content`, and reminders. Current `ticktick_create_task`
+   / `ticktick_update` are simpler. Extend `lib/integrations/ticktick.ts` and `lib/tools.ts` only after
+   flagging cache impact, then verify with live TickTick read-back.
+2. **Dashboard workflow editor** — dashboard currently shows/deletes playbooks but cannot edit them. Add
+   create/edit/pause controls for playbooks, facts, places, and scheduler settings so Jonny can maintain
+   these rules without texting giant manuals or changing code.
+3. **Real migrations** — introduce a migration workflow instead of relying only on `db/schema.sql`, so
+   future schema changes are repeatable and auditable.
+4. **Live smoke-test checklist** — document or script the post-deploy checks: health rev, webhook simulate,
+   Supabase `messages`, Supabase `usage_log`, and one safe tool-loop path.
+5. **Mocked integration tests** — add tests around write verification semantics for TickTick/Notion/Gmail/
+   Calendar so regressions cannot reintroduce phantom "done" replies.
+6. **Admin/operator dashboard panels** — add panels for `messages`, `usage_log`, failed sends, recent tool
+   calls, recent proactive ticks, and failed integration operations.
 
 ## Security follow-ups
 - Rotate keys that were pasted in the original build chat: Anthropic, Linq, Vercel token.
