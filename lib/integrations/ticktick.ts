@@ -86,6 +86,7 @@ export async function listTasks(
       for (const task of data.tasks || []) {
         all.push({
           id: task.id,
+          projectId: p.id,
           title: task.title,
           due: task.dueDate || task.startDate || null,
           priority: task.priority ?? 0,
@@ -128,18 +129,85 @@ export async function listTasks(
   };
 }
 
+async function projectIdByName(t: string, name?: string): Promise<string | undefined> {
+  if (!name) return undefined;
+  const res = await fetch(`${API}/project`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!res.ok) return undefined;
+  const projects = await res.json();
+  const hit = (projects || []).find((p: any) => p.name?.toLowerCase() === name.toLowerCase()) ||
+    (projects || []).find((p: any) => p.name?.toLowerCase().includes(name.toLowerCase()));
+  return hit?.id;
+}
+
+export async function completeTask(projectId: string, taskId: string): Promise<{ ok: boolean; detail: string }> {
+  const t = await token();
+  if (!t) return { ok: false, detail: "TickTick not connected" };
+  const res = await fetch(`${API}/project/${projectId}/task/${taskId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  return { ok: res.ok, detail: res.ok ? `completed task ${taskId}` : `complete failed: ${res.status} ${(await res.text()).slice(0, 100)}` };
+}
+
+export async function deleteTask(projectId: string, taskId: string): Promise<{ ok: boolean; detail: string }> {
+  const t = await token();
+  if (!t) return { ok: false, detail: "TickTick not connected" };
+  const res = await fetch(`${API}/project/${projectId}/task/${taskId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  return { ok: res.ok, detail: res.ok ? `deleted task ${taskId}` : `delete failed: ${res.status}` };
+}
+
+// update/reschedule/move a task. moveToProjectId changes which list it lives in.
+export async function updateTask(f: {
+  taskId: string;
+  projectId: string;
+  title?: string;
+  due?: string;
+  priority?: number;
+  moveToProjectId?: string;
+}): Promise<{ ok: boolean; verified?: boolean; detail: string }> {
+  const t = await token();
+  if (!t) return { ok: false, detail: "TickTick not connected" };
+  const cur = await fetch(`${API}/project/${f.projectId}/task/${f.taskId}`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!cur.ok) return { ok: false, detail: `task not found (${cur.status})` };
+  const task = await cur.json();
+  const body: any = {
+    id: f.taskId,
+    projectId: f.moveToProjectId || f.projectId,
+    title: f.title ?? task.title,
+  };
+  if (f.due !== undefined) body.dueDate = f.due;
+  else if (task.dueDate) body.dueDate = task.dueDate;
+  if (f.priority !== undefined) body.priority = f.priority;
+  else if (task.priority != null) body.priority = task.priority;
+
+  const res = await fetch(`${API}/task/${f.taskId}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, detail: `update failed: ${JSON.stringify(d).slice(0, 120)}` };
+  const check = await fetch(`${API}/project/${body.projectId}/task/${f.taskId}`, { headers: { Authorization: `Bearer ${t}` } });
+  return { ok: true, verified: check.ok, detail: `updated "${body.title}"${f.due !== undefined ? ` (due ${f.due})` : ""}${f.moveToProjectId ? " (moved)" : ""}` };
+}
+
 export async function createTask(f: {
   title: string;
   due?: string;
   priority?: number;
   projectId?: string;
+  project?: string;
 }): Promise<{ ok: boolean; id?: string; verified?: boolean; detail: string }> {
   const t = await token();
   if (!t) return { ok: false, detail: "TickTick not connected" };
+  const projectId = f.projectId || (await projectIdByName(t, f.project));
   const body: any = { title: f.title };
   if (f.due) body.dueDate = f.due; // ISO8601, e.g. 2026-07-05T15:00:00+0000
   if (f.priority != null) body.priority = f.priority; // 0 none,1 low,3 med,5 high
-  if (f.projectId) body.projectId = f.projectId;
+  if (projectId) body.projectId = projectId;
 
   const res = await fetch(`${API}/task`, {
     method: "POST",

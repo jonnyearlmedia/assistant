@@ -110,12 +110,36 @@ export const TOOLS: Anthropic.Tool[] = [
   // --- integrations (stubbed until auth wired) ---
   {
     name: "ticktick_create_task",
-    description: "Create a task in TickTick (source of truth for schedule). Verified read-back after write.",
+    description: "Create a task in TickTick. 'project' = list name (e.g. 'Fitness', 'Personal') — omit for Inbox. due=ISO8601. priority 0/1/3/5. Verified read-back.",
     input_schema: {
       type: "object",
       properties: { title: { type: "string" }, due: { type: "string" }, project: { type: "string" }, priority: { type: "number" } },
       required: ["title"],
     },
+  },
+  {
+    name: "ticktick_projects",
+    description: "List jonny's TickTick projects/lists with their ids (needed to move tasks or create into a specific list).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "ticktick_complete",
+    description: "Mark a TickTick task done. Needs task_id + project_id (get both from ticktick_list).",
+    input_schema: { type: "object", properties: { task_id: { type: "string" }, project_id: { type: "string" } }, required: ["task_id", "project_id"] },
+  },
+  {
+    name: "ticktick_update",
+    description: "Reschedule / rename / re-prioritize / MOVE a TickTick task. task_id + project_id required. Set due (ISO8601) to reschedule, move_to_project_id to move it to another list. Verified read-back.",
+    input_schema: {
+      type: "object",
+      properties: { task_id: { type: "string" }, project_id: { type: "string" }, title: { type: "string" }, due: { type: "string" }, priority: { type: "number" }, move_to_project_id: { type: "string" } },
+      required: ["task_id", "project_id"],
+    },
+  },
+  {
+    name: "ticktick_delete",
+    description: "Delete a TickTick task. Needs task_id + project_id.",
+    input_schema: { type: "object", properties: { task_id: { type: "string" }, project_id: { type: "string" } }, required: ["task_id", "project_id"] },
   },
   {
     name: "ticktick_list",
@@ -161,6 +185,16 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
   },
   {
+    name: "gmail_send",
+    description: "SEND an email as jonny from his primary Gmail. Only call this AFTER he's explicitly okayed the recipient + content — confirm first, then send.",
+    input_schema: { type: "object", properties: { to: { type: "string" }, subject: { type: "string" }, body: { type: "string" } }, required: ["to", "subject", "body"] },
+  },
+  {
+    name: "gmail_draft",
+    description: "Save a Gmail draft (does NOT send). Good for prepping a reply he can review/send later.",
+    input_schema: { type: "object", properties: { to: { type: "string" }, subject: { type: "string" }, body: { type: "string" } }, required: ["to", "subject", "body"] },
+  },
+  {
     name: "gcal_upcoming",
     description: "List jonny's upcoming Google Calendar events (note: his primary planner is TickTick).",
     input_schema: { type: "object", properties: { limit: { type: "number" } } },
@@ -176,8 +210,13 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "drive_search",
-    description: "Search jonny's Google Drive by filename and return matching files with links.",
+    description: "Search jonny's Google Drive by filename. Returns files with ids + links (use the id with drive_read).",
     input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "drive_read",
+    description: "Read the contents of a Google Drive file by id (get the id from drive_search). Handles Google Docs + text files.",
+    input_schema: { type: "object", properties: { file_id: { type: "string" } }, required: ["file_id"] },
   },
   {
     name: "drive_time",
@@ -246,8 +285,29 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "ticktick_create_task":
         if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
         return JSON.stringify(
-          await ticktick.createTask({ title: input.title, due: input.due, priority: input.priority })
+          await ticktick.createTask({ title: input.title, due: input.due, priority: input.priority, project: input.project })
         );
+      case "ticktick_projects":
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(await ticktick.listProjects());
+      case "ticktick_complete":
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(await ticktick.completeTask(input.project_id, input.task_id));
+      case "ticktick_update":
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(
+          await ticktick.updateTask({
+            taskId: input.task_id,
+            projectId: input.project_id,
+            title: input.title,
+            due: input.due,
+            priority: input.priority,
+            moveToProjectId: input.move_to_project_id,
+          })
+        );
+      case "ticktick_delete":
+        if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
+        return JSON.stringify(await ticktick.deleteTask(input.project_id, input.task_id));
       case "ticktick_list":
         if (!(await ticktick.ticktickConnected())) return NOT_CONNECTED("TickTick");
         return JSON.stringify(await ticktick.listTasks(input.scope || "all"));
@@ -291,6 +351,12 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "gmail_search":
         if (!(await google.googleConnected())) return NOT_CONNECTED("Gmail");
         return JSON.stringify(await google.gmailSearch(input.query, 5));
+      case "gmail_send":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Gmail");
+        return JSON.stringify(await google.gmailSend(input.to, input.subject, input.body));
+      case "gmail_draft":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Gmail");
+        return JSON.stringify(await google.gmailDraft(input.to, input.subject, input.body));
       case "gcal_upcoming":
         if (!(await google.googleConnected())) return NOT_CONNECTED("Google Calendar");
         return JSON.stringify(await google.calendarUpcoming(input.limit || 10));
@@ -302,6 +368,9 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "drive_search":
         if (!(await google.googleConnected())) return NOT_CONNECTED("Google Drive");
         return JSON.stringify(await google.driveSearch(input.query, 6));
+      case "drive_read":
+        if (!(await google.googleConnected())) return NOT_CONNECTED("Google Drive");
+        return JSON.stringify(await google.driveRead(input.file_id));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;

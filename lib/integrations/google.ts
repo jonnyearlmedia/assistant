@@ -155,8 +155,59 @@ export async function driveSearch(query: string, max = 6): Promise<{ ok: boolean
   );
   const d = await res.json();
   if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
-  const files = (d.files || []).map((f: any) => ({ name: f.name, type: f.mimeType, link: f.webViewLink, modified: f.modifiedTime }));
+  const files = (d.files || []).map((f: any) => ({ id: f.id, name: f.name, type: f.mimeType, link: f.webViewLink, modified: f.modifiedTime }));
   return { ok: true, detail: `${files.length} file(s)`, files };
+}
+
+// read a Drive file's contents (Google Docs exported to text; other text files read directly)
+export async function driveRead(fileId: string): Promise<{ ok: boolean; name?: string; text?: string; detail: string }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,mimeType`, {
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  if (!meta.ok) return { ok: false, detail: `file not found (${meta.status})` };
+  const m = await meta.json();
+  const isGoogleDoc = (m.mimeType || "").startsWith("application/vnd.google-apps");
+  const url = isGoogleDoc
+    ? `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`
+    : `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${t}` } });
+  if (!res.ok) return { ok: false, detail: `read failed: ${res.status}` };
+  const text = (await res.text()).slice(0, 8000);
+  return { ok: true, name: m.name, text, detail: `read "${m.name}"` };
+}
+
+function buildRaw(to: string, subject: string, body: string): string {
+  const msg = [`To: ${to}`, `Subject: ${subject}`, "Content-Type: text/plain; charset=utf-8", "", body].join("\r\n");
+  return Buffer.from(msg).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// send an email as jonny (persona gates this behind his explicit ok)
+export async function gmailSend(to: string, subject: string, body: string): Promise<{ ok: boolean; detail: string }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: buildRaw(to, subject, body) }),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
+  return { ok: true, detail: `✅ sent to ${to} — "${subject}"` };
+}
+
+export async function gmailDraft(to: string, subject: string, body: string): Promise<{ ok: boolean; detail: string }> {
+  const t = await accessToken("google");
+  if (!t) return { ok: false, detail: "Google not connected" };
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: { raw: buildRaw(to, subject, body) } }),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: JSON.stringify(d).slice(0, 150) };
+  return { ok: true, detail: `draft saved for ${to} — "${subject}"` };
 }
 
 export async function calendarUpcoming(max = 10): Promise<{ ok: boolean; detail: string; events?: any[] }> {
