@@ -1,0 +1,22 @@
+name: lexa proactive tick
+
+# Vercel Hobby caps cron at once/day, so this free scheduled workflow drives lexa's frequent
+# proactivity (timed reminders + evening check-ins) by pinging her heartbeat every 15 min.
+# Requires a single repo secret: LEXA_TICK_URL = the full /api/cron/tick URL incl. the
+# ?x-vercel-protection-bypass=...&key=... query params. (Settings → Secrets → Actions.)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping lexa heartbeat
+        run: |
+          if [ -z "${{ secrets.LEXA_TICK_URL }}" ]; then
+            echo "LEXA_TICK_URL secret not set — skipping"; exit 0
+          fi
+          curl -sS -m 90 "${{ secrets.LEXA_TICK_URL }}" || true
