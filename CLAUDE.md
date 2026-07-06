@@ -44,7 +44,7 @@ real phone number and she replies, remembers, acts on his tools, and reaches out
 
 ```
 app/
-  api/linq/webhook/route.ts   inbound texts: verify → debounce (waitUntil) → think → bubble replies
+  api/linq/webhook/route.ts   inbound texts: verify → debounce (waitUntil) → triage → think → bubble replies
   api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin|jobs to fire on demand
   api/connect/{ticktick,google,google2}[/callback]/route.ts   OAuth connect flows
   api/dashboard/route.ts      dashboard mutations (owner-only via Vercel Auth)
@@ -53,6 +53,8 @@ app/
 lib/
   persona.ts      system prompt (identity + 3 pillars + texting style + routing + proactive learning)
   brain.ts        think() tool-use loop + composeProactive() (proactive voice) + vision/file ingestion
+  triage.ts       quickTriage() — cheap Haiku front-door: pure chatter → fast direct reply,
+                  everything substantive (or any media) falls through to think() unchanged
   tools.ts        ALL tool definitions + dispatch() switch  ← add new capabilities here
   memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, places, message log, debounce)
   db.ts           lazy Supabase client + resolveUser + User type
@@ -95,7 +97,8 @@ Set in Vercel project env (Settings → Environment Variables), for Production +
 `SUPABASE_SERVICE_ROLE_KEY` (currently holds the Supabase publishable key), `CRON_SECRET`,
 `OWNER_PHONE`, `APP_BASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_MAPS_API_KEY`,
 `TICKTICK_CLIENT_ID`, `TICKTICK_CLIENT_SECRET`, `LINQ_WEBHOOK_SECRET`.
-Optional: `LINQ_ENFORCE_SIG=1` (enforce webhook sig), `SETTLE_MS` (debounce window).
+Optional: `LINQ_ENFORCE_SIG=1` (enforce webhook sig), `SETTLE_MS` (debounce window),
+`LEXA_TRIAGE_MODEL` (Haiku model for the cheap inbound triage; defaults to claude-haiku-4-5).
 GitHub repo secret: `LEXA_TICK_URL` (full /api/cron/tick URL incl. bypass + cron key) for the pinger.
 
 A session that needs to hit protected endpoints via curl gets the bypass/cron values from Vercel env

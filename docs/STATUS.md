@@ -88,8 +88,14 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 
 ## 🗺️ Recommended roadmap (priority order)
 
-1. ~~**Prompt caching**~~ — ✅ DONE (see Cost/observability above). Follow-on: consider Haiku for
-   simple turns (design around the cache — caches are per-model, so route whole turns, not mid-loop).
+1. ~~**Prompt caching**~~ — ✅ DONE (see Cost/observability above).
+   ~~Follow-on: Haiku for simple turns~~ — ✅ DONE. `lib/triage.ts` `quickTriage()` runs a cheap
+   Haiku classify-or-reply on every inbound BEFORE `think()`: pure social chatter (gn/thanks/banter)
+   gets a fast direct reply; anything substantive or any media falls through to the full Sonnet loop
+   unchanged. Routes whole turns (caches are per-model), fail-safe to `full` on any error/ambiguity,
+   cache-safe (separate model + prompt, never touches the persona/TOOLS prefix). Opt out per-user via
+   `settings.triage_disabled`. Model from `LEXA_TRIAGE_MODEL` (default claude-haiku-4-5). Verify the
+   split in `usage_log` (`fn='triage'` rows vs `fn='think'`).
 2. **Spend awareness / cap** — `usage_log` table already records per-call tokens; build on it:
    cost rollups, warn jonny, optional monthly ceiling.
 3. **Behavioral adaptation (wire it up)** — use `behavior_log` to learn jonny's procrastination pattern
