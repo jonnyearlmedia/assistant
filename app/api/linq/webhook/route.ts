@@ -5,6 +5,7 @@ import { waitUntil } from "@vercel/functions";
 import { verifyLinq, parseInbound, markRead, InboundMessage } from "@/lib/linq";
 import { resolveUser, User, db } from "@/lib/db";
 import { think } from "@/lib/brain";
+import { quickTriage } from "@/lib/triage";
 import { sendBubbles } from "@/lib/send";
 import * as mem from "@/lib/memory";
 
@@ -28,7 +29,15 @@ async function replyAfterSettle(user: User, from: string, chatId: string | undef
     const media = batch.flatMap((m: any) => (Array.isArray(m.media) ? m.media : []));
     await mem.markHandled(batch.map((m: any) => m.id)); // claim the batch
 
-    const reply = await think(user, combined, media, { historyBefore: earliest });
+    // cheap Haiku triage first: pure social chatter gets a fast direct reply and skips the full
+    // Sonnet tool loop. media (vision) and anything substantive fall through to the full brain.
+    let reply: string;
+    const triage = media.length === 0 ? await quickTriage(user, combined) : { route: "full" as const };
+    if (triage.route === "quick" && triage.reply) {
+      reply = triage.reply;
+    } else {
+      reply = await think(user, combined, media, { historyBefore: earliest });
+    }
 
     // durable: if every bubble fails to send, the reply is queued and retried on the next tick
     await sendBubbles(user.id, from, chatId, reply, { durable: true });
@@ -92,5 +101,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "durable-queue-v5" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "haiku-triage-v6" });
 }
