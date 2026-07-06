@@ -47,8 +47,9 @@ app/
   api/linq/webhook/route.ts   inbound texts: verify → debounce (waitUntil) → triage → think → bubble replies
   api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin|jobs to fire on demand
   api/connect/{ticktick,google,google2}[/callback]/route.ts   OAuth connect flows
-  api/dashboard/route.ts      dashboard mutations (owner-only via Vercel Auth)
-  dashboard/page.tsx          memory dashboard (view/edit facts, goals, playbooks, reminders, settings)
+  api/dashboard/route.ts      control-panel mutations (owner-only via Vercel Auth) — CRUD for every editable entity
+  dashboard/page.tsx          control panel: settings, subagent builder, memories(by category), goals, rules/
+                              workflows, reminders, commitments, places, live to-dos(ticktick), spend, reliability
   page.tsx, layout.tsx        landing shell
 lib/
   persona.ts      system prompt (identity + 3 pillars + texting style + routing + proactive learning)
