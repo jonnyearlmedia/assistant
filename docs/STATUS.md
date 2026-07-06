@@ -29,6 +29,17 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - **Maps** — live traffic drive time
 - **Location (manual)** — save named places (home/gym/work), set current location by text, drive-time origins
 
+**Cost / observability**
+- **Prompt caching (LIVE, verified in prod)** — system prompt is stability-ordered blocks in
+  `lib/persona.ts` (frozen persona → memory → volatile time LAST); `think()` adds a cache
+  breakpoint on the last message each tool-loop turn (`withCacheMarker` in `lib/brain.ts`).
+  One cold call measured: cache_write 7,837 / input 2. Warm reads bill ~0.1×; 5-min TTL,
+  refreshed by every read. RULE: keep the persona blocks byte-stable and never put dynamic
+  content (time, IDs) before them — that silently kills the cache.
+- **usage_log table (Supabase)** — every Anthropic call writes fn/turn/model/input/cache_read/
+  cache_write/output (fire-and-forget from `logUsage` in `lib/brain.ts`). Query it to verify
+  cache hits and compute spend. `composeProactive` is intentionally uncached (no tools in prefix).
+
 **Proactive engine** (`/api/cron/tick`, driven by GitHub 15-min pinger + daily Vercel cron)
 - Due reminders + "leave now" (with drive time)
 - Morning brief (TickTick + Notion + Calendar + unread email)
@@ -48,16 +59,16 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   DB tables + the plan exist; needs Linq to enable it. Manual location works meanwhile.
 
 ## ❌ Not built
-- **Prompt caching** (cost optimization — see roadmap #1)
 - **Calendly, Box** integrations (accounts connected, no client built)
 - **Voice-note transcription** (if Linq delivers audio parts)
 - **Group chats** (Linq supports them; single-recipient today)
 
 ## 🗺️ Recommended roadmap (priority order)
 
-1. **Prompt caching** — cache the static system prompt + tool definitions (~7k tokens re-sent every
-   model call) with Anthropic prompt caching. Cuts per-message cost ~3–5x. Consider Haiku for simple turns.
-2. **Spend awareness / cap** — track token cost per message, warn jonny, optional monthly ceiling.
+1. ~~**Prompt caching**~~ — ✅ DONE (see Cost/observability above). Follow-on: consider Haiku for
+   simple turns (design around the cache — caches are per-model, so route whole turns, not mid-loop).
+2. **Spend awareness / cap** — `usage_log` table already records per-call tokens; build on it:
+   cost rollups, warn jonny, optional monthly ceiling.
 3. **Behavioral adaptation (wire it up)** — use `behavior_log` to learn jonny's procrastination pattern
    and nudge earlier for tasks he tends to skip. Highest-value "for him" feature.
 4. **Commitment follow-through** — detect "I'll do X later" in chat, store it, follow up proactively.

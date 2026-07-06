@@ -118,9 +118,16 @@ or from jonny — they are intentionally NOT committed. Most dev needs only git 
 - **Signature verification (`verifyLinq`) is log-only** unless `LINQ_ENFORCE_SIG=1`. Endpoints are
   gated by the bypass secret; if that leaks, spoofed inbound is possible.
 - **Linq live location is blocked** (account entitlement error 2011); manual location works.
-- **No prompt caching yet** → cost is a few cents to ~20¢/message; caching the static system+tools
-  prompt would cut it 3–5x. (Top roadmap item.)
-- Cost is on jonny's Anthropic key, pay-per-use, no cap.
+- **Prompt caching is LIVE** (verified in prod) — `buildSystemPrompt` returns stability-ordered
+  blocks and `think()` marks the last message per tool-loop turn. NEVER add dynamic content
+  (timestamps, IDs) to the persona/memory blocks or reorder/edit `TOOLS` casually — any byte
+  change before a cache breakpoint silently kills the cache. Verify via the Supabase `usage_log`
+  table (`cache_read` should be ~7k+ on warm calls; cold calls show `cache_write` instead).
+- **Vercel MCP access is limited** — the claude.ai Vercel connector is NOT granted the
+  `text-assistant` project (only jonny-os/flowst8/berks), and the Composio Vercel token is expired.
+  Don't burn time on Vercel logs/deployments APIs; verify deploys via the GitHub commit status on
+  the pushed SHA and behavior via Supabase (`messages`, `usage_log`).
+- Cost is on jonny's Anthropic key, pay-per-use, no cap (`usage_log` records per-call tokens).
 
 ## House rules for editing lexa
 
