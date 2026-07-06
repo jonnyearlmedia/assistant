@@ -83,7 +83,10 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 
 ## ❌ Not built
 - **Calendly, Box** integrations (accounts connected, no client built)
-- **Voice-note transcription** (if Linq delivers audio parts)
+- ~~**Voice-note transcription**~~ — ✅ CODE DONE (`lib/integrations/transcribe.ts`): Linq audio media
+  part → Deepgram nova-2 → transcript into `think()`, treated as what he said. **Needs one thing from
+  jonny to switch on: a `DEEPGRAM_API_KEY` in Vercel env.** No key = voice memos fall back to the
+  "couldn't open it" path (nothing breaks). Swap provider (OpenAI/Groq Whisper) is a ~10-line edit.
 - **Group chats** (Linq supports them; single-recipient today)
 
 ## 🗺️ Recommended roadmap (priority order)
