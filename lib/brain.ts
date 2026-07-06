@@ -101,9 +101,11 @@ export async function think(
 
   let reply = "";
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    // max_tokens must leave room for adaptive thinking (on by default for this model) AND the
+    // reply — a cap hit mid-thinking yields zero text blocks and she'd text "…"
     const res = await client.messages.create({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: 2048,
       system,
       tools: TOOLS,
       messages: withCacheMarker(messages),
@@ -169,9 +171,12 @@ SITUATION: ${situation}
 ${context ? `\nRELEVANT DATA:\n${context}\n` : ""}
 write exactly what you'd text him right now. keep it short + natural, real bubbles separated by blank lines. don't overexplain that you're being proactive — just text him like a friend would.`;
 
+  // thinking off: this is a straight compose (no tools), and with it on-by-default a big brief
+  // context can burn the whole token budget on thinking and deliver zero text (the "…" bug)
   const res = await client.messages.create({
     model: MODEL,
-    max_tokens: 600,
+    max_tokens: 1500,
+    thinking: { type: "disabled" },
     system,
     messages: [{ role: "user", content: prompt }],
   });
