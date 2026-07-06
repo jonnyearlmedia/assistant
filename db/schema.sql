@@ -147,3 +147,19 @@ create index if not exists idx_reminders_due on reminders(status, due_at);
 create index if not exists idx_jobs_runnable on jobs(status, run_at);
 create index if not exists idx_messages_user_time on messages(user_id, created_at desc);
 create index if not exists idx_behavior_user on behavior_log(user_id, created_at desc);
+
+-- per-API-call token accounting (written by lib/brain.ts logUsage). proves prompt-cache hits
+-- and feeds spend awareness: cost ≈ input*full + cache_read*0.1x + cache_write*1.25x + output.
+create table if not exists usage_log (
+  id           uuid primary key default gen_random_uuid(),
+  created_at   timestamptz not null default now(),
+  fn           text not null,                      -- think | proactive
+  turn         int not null default 0,             -- tool-loop turn within one think()
+  model        text,
+  input        int not null default 0,             -- uncached input tokens (full price)
+  cache_read   int not null default 0,             -- tokens served from cache (~0.1x)
+  cache_write  int not null default 0,             -- tokens written to cache (~1.25x)
+  output       int not null default 0
+);
+
+create index if not exists usage_log_created_at_idx on usage_log (created_at desc);

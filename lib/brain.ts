@@ -5,7 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "./persona";
 import { TOOLS, dispatch } from "./tools";
-import { User } from "./db";
+import { User, db } from "./db";
 import { fetchMedia, fetchTextAttachment } from "./linq";
 import * as mem from "./memory";
 
@@ -34,19 +34,20 @@ function withCacheMarker(messages: Anthropic.MessageParam[]): Anthropic.MessageP
   return out;
 }
 
-// one line per API call in the Vercel logs — proves cache hits, and is the seed of spend tracking
+// per-call token accounting: one line in the Vercel logs + a row in usage_log (queryable spend
+// tracking). the insert is fire-and-forget — usage bookkeeping must never delay or break a reply.
 function logUsage(fn: string, turn: number, u: Anthropic.Usage) {
-  console.log(
-    "[lexa] usage",
-    JSON.stringify({
-      fn,
-      turn,
-      input: u.input_tokens,
-      cache_read: u.cache_read_input_tokens ?? 0,
-      cache_write: u.cache_creation_input_tokens ?? 0,
-      output: u.output_tokens,
-    })
-  );
+  const row = {
+    fn,
+    turn,
+    model: MODEL,
+    input: u.input_tokens,
+    cache_read: u.cache_read_input_tokens ?? 0,
+    cache_write: u.cache_creation_input_tokens ?? 0,
+    output: u.output_tokens,
+  };
+  console.log("[lexa] usage", JSON.stringify(row));
+  Promise.resolve(db.from("usage_log").insert(row)).catch(() => {});
 }
 
 export async function think(
