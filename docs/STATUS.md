@@ -96,8 +96,10 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
    cache-safe (separate model + prompt, never touches the persona/TOOLS prefix). Opt out per-user via
    `settings.triage_disabled`. Model from `LEXA_TRIAGE_MODEL` (default claude-haiku-4-5). Verify the
    split in `usage_log` (`fn='triage'` rows vs `fn='think'`).
-2. **Spend awareness / cap** — `usage_log` table already records per-call tokens; build on it:
-   cost rollups, warn jonny, optional monthly ceiling.
+2. ~~**Spend awareness**~~ — ✅ DONE (rollups). `lib/spend.ts` `computeSpend()` dollarizes `usage_log`
+   (per-model rates: sonnet-5 $3/$15, haiku $1/$5 per 1M; cache_read 0.1×, cache_write 1.25×) behind the
+   `spend_report` tool (period today|week|month|all, breakdown by fn). Estimate only — she says "~".
+   Follow-on still open: proactive warn / optional monthly ceiling.
 3. **Behavioral adaptation (wire it up)** — use `behavior_log` to learn jonny's procrastination pattern
    and nudge earlier for tasks he tends to skip. Highest-value "for him" feature.
 4. ~~**Commitment follow-through**~~ — ✅ DONE. lexa catches "i'll do X later" via the `track_commitment`
