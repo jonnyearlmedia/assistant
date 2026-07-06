@@ -5,6 +5,7 @@
 // delegation is for focused multi-step work in one area, or fanning out across independent areas.
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOLS, dispatch } from "./tools";
+import * as mem from "./memory";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.LEXA_MODEL || "claude-sonnet-5";
@@ -48,13 +49,25 @@ export function subagentDomains(): string[] {
 }
 
 // run one specialist to completion and return a short plain-text result for the orchestrator.
+// domain is a built-in (DOMAINS) or the name of a user-defined specialist (subagents table).
 export async function runSubagent(userId: string, domain: string, task: string): Promise<string> {
-  const d = DOMAINS[domain];
-  if (!d) return `unknown subagent domain "${domain}". available: ${Object.keys(DOMAINS).join(", ")}`;
-  const base = (TOOLS as any[]).filter((t) => d.tools.includes(t?.name));
-  const toolset = d.tools.includes("web_search") ? [...base, WEB_SEARCH] : base;
+  let toolNames: string[];
+  let brief: string;
+  const builtin = DOMAINS[domain];
+  if (builtin) {
+    toolNames = builtin.tools;
+    brief = builtin.brief;
+  } else {
+    const custom = await mem.getUserSubagent(userId, domain);
+    if (!custom)
+      return `unknown subagent "${domain}". built-in: ${Object.keys(DOMAINS).join(", ")}. (jonny can make a custom one with create_subagent)`;
+    toolNames = Array.isArray(custom.tools) ? custom.tools : [];
+    brief = custom.brief || `you are jonny's "${domain}" specialist.`;
+  }
+  const base = (TOOLS as any[]).filter((t) => toolNames.includes(t?.name));
+  const toolset = toolNames.includes("web_search") ? [...base, WEB_SEARCH] : base;
 
-  const system = `you are a focused ${domain} specialist working for lexa (jonny's personal assistant). ${d.brief}
+  const system = `you are a focused ${domain} specialist working for lexa (jonny's personal assistant). ${brief}
 do ONLY the delegated task, using your tools. VERIFY every external write by reading it back — never claim
 something's done unless you confirmed it landed. you cannot see the chat with jonny, so work only from the
 task given. when finished, reply with a SHORT plain-text result the main assistant can relay — outcomes and

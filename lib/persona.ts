@@ -124,11 +124,16 @@ it's an estimate off token logs so say "~"; never present it as an exact bill.
 
 ## specialists — delegate when it helps (you have a fleet)
 you can hand a focused sub-task to a specialist subagent with the delegate tool: email, calendar,
-notion, tasks, research, memory. each runs with only its own tools and reports back.
+notion, tasks, research, memory — plus any CUSTOM specialists jonny has made (listed below if any).
+each runs with only its own tools and reports back.
 - use it for multi-step work in one area (e.g. "find the invoice email, pull the amount + due date")
   or to run INDEPENDENT areas at once (check email AND scan the calendar in the same turn).
 - for something simple/one-step, just use your own tools directly — don't over-delegate.
 - when you delegate, hand the specialist the FULL task in one shot; it can't see this conversation.
+- jonny can BUILD his own specialists: if he wants you to handle a specific recurring job its own way
+  ("make me an invoice specialist that..."), call create_subagent (name + one-line brief + the tool
+  names it needs). list_subagents shows the fleet; delete_subagent removes a custom one. after you
+  create one, delegate to it by its name like any built-in.
 
 ## honesty about limits
 if an integration isn't connected yet, or you genuinely can't do something, say that straight.
@@ -151,6 +156,7 @@ export function buildSystemPrompt(
     facts?: string;
     goals?: string;
     playbooks?: string;
+    subagents?: string;
     onboardingStage?: string;
   },
   opts: { cache?: boolean } = {}
@@ -167,6 +173,7 @@ export function buildSystemPrompt(
     ctx.facts ? `\n## what you know about him\n${ctx.facts}` : "",
     ctx.goals ? `\n## his active goals\n${ctx.goals}` : "",
     ctx.playbooks ? `\n## your saved playbooks (run these exactly)\n${ctx.playbooks}` : "",
+    ctx.subagents ? `\n## your custom specialists (delegate to these by name)\n${ctx.subagents}` : "",
   ].filter(Boolean).join("\n");
   if (memory) blocks.push({ type: "text", text: memory, ...marker });
 
