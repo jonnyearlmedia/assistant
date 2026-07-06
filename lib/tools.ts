@@ -248,6 +248,21 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { file_id: { type: "string" } }, required: ["file_id"] },
   },
   {
+    name: "save_place",
+    description: "Save a named place (home, gym, work, school…) with its address, for drive-time + 'leave now' reminders. Naming one 'home' sets his home address.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, address: { type: "string" } }, required: ["name", "address"] },
+  },
+  {
+    name: "list_places",
+    description: "List jonny's saved places (name + address).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_current_location",
+    description: "Set jonny's current location when he tells you where he is (address or place). Used for accurate drive-time / 'when should I leave' math.",
+    input_schema: { type: "object", properties: { address: { type: "string" } }, required: ["address"] },
+  },
+  {
     name: "drive_time",
     description: "Get live drive time between two places (for 'leave now' reminders).",
     input_schema: {
@@ -414,6 +429,12 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "drive_read":
         if (!(await google.googleConnected())) return NOT_CONNECTED("Google Drive");
         return JSON.stringify(await google.driveRead(input.file_id));
+      case "save_place":
+        return JSON.stringify(await mem.savePlace(u, input.name, input.address));
+      case "list_places":
+        return JSON.stringify(await mem.listPlaces(u));
+      case "set_current_location":
+        return JSON.stringify(await mem.setCurrentLocation(u, input.address));
       case "drive_time": {
         if (!maps.mapsConnected()) return NOT_CONNECTED("Google Maps");
         let origin = input.origin;
@@ -425,7 +446,7 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
             .maybeSingle();
           origin = data?.last_address || data?.home_address;
         }
-        if (!origin) return "need an origin — set jonny's home address or share location first.";
+        if (!origin) return "need an origin — set jonny's home address or tell me where he is first.";
         return JSON.stringify(await maps.driveTime(origin, input.destination));
       }
       default:

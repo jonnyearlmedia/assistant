@@ -134,6 +134,29 @@ export async function cancelReminder(userId: string, id: string) {
   return { cancelled: id };
 }
 
+// named places (home, gym, work…) for drive-time + "leave now" reminders
+export async function savePlace(userId: string, name: string, address: string) {
+  const { data, error } = await db
+    .from("places")
+    .upsert({ user_id: userId, name, address }, { onConflict: "user_id,name" })
+    .select("id,name,address")
+    .single();
+  if (error) throw new Error(`savePlace: ${error.message}`);
+  if (name.toLowerCase() === "home") await db.from("users").update({ home_address: address }).eq("id", userId);
+  return data;
+}
+
+export async function listPlaces(userId: string) {
+  const { data } = await db.from("places").select("name,address").eq("user_id", userId);
+  return data ?? [];
+}
+
+// jonny tells lexa where he is (text) → sets current location for drive-time math
+export async function setCurrentLocation(userId: string, address: string) {
+  await db.from("users").update({ last_address: address, last_location_at: new Date().toISOString() }).eq("id", userId);
+  return { ok: true, address };
+}
+
 // procrastination modeling: record what happened vs. what was scheduled
 export async function logBehavior(
   userId: string,
