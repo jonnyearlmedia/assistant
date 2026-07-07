@@ -111,6 +111,21 @@ export async function POST(req: NextRequest) {
         });
         return NextResponse.json({ ok: true });
       }
+      case "edit_reminder": {
+        if (!body.id) return NextResponse.json({ error: "id required" }, { status: 400 });
+        const patch: any = {};
+        if (typeof body.title === "string" && body.title.trim()) patch.title = body.title.trim();
+        if (body.due_at) {
+          const t = new Date(body.due_at);
+          if (isNaN(t.getTime())) return NextResponse.json({ error: "bad time" }, { status: 400 });
+          patch.due_at = t.toISOString();
+          patch.status = "scheduled"; // re-editing an overdue/cancelled one re-arms it
+        }
+        if (body.location !== undefined) patch.location = body.location || null;
+        if (!Object.keys(patch).length) return NextResponse.json({ error: "nothing to change" }, { status: 400 });
+        await db.from("reminders").update(patch).eq("user_id", uid).eq("id", body.id);
+        return NextResponse.json({ ok: true });
+      }
 
       // ---- commitments ----
       case "resolve_commitment": {
@@ -164,6 +179,15 @@ export async function POST(req: NextRequest) {
       case "set_instructions": {
         const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
         const settings = { ...((user?.settings as any) || {}), custom_instructions: String(body.instructions || "").slice(0, 4000) };
+        await db.from("users").update({ settings }).eq("id", uid);
+        return NextResponse.json({ ok: true });
+      }
+      // ---- rules as an editable list: add / edit / remove one line at a time ----
+      case "set_instruction_list": {
+        const items = asArray(body.items).map((s) => String(s).replace(/^[-•\s]+/, "").trim()).filter(Boolean).slice(0, 40);
+        const merged = items.map((t) => `- ${t}`).join("\n").slice(0, 4000);
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const settings = { ...((user?.settings as any) || {}), custom_instructions: merged };
         await db.from("users").update({ settings }).eq("id", uid);
         return NextResponse.json({ ok: true });
       }

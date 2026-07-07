@@ -26,6 +26,14 @@ function abilitiesFor(tools: string[]): string {
   return out.join("   ") || "nothing yet";
 }
 
+// her baked-in behavior — shown read-only so you know what's already governing her
+const CORE_RULES = [
+  "reads every change back and confirms it before she says \"done\"",
+  "keeps texts short and human — like a real person, not a bot",
+  "has a backbone: no fake apologies, won't cave when she's right",
+  "everything she knows lives in this dashboard — all of it editable",
+];
+
 const EXAMPLES = [
   "call me jonny, not jonathan",
   "gym at 6am mon / wed / fri",
@@ -125,8 +133,16 @@ export default function DashboardClient({ initial }: { initial: any }) {
         </div>
 
         {/* RULES */}
-        <Card id="rules" icon="🗣️" title="How she talks to you" open help="Standing rules for how she should act & sound. These beat her defaults, every message.">
-          <EditText initial={s.custom_instructions || ""} rows={4} placeholder="e.g. keep it short. no emojis before noon. push me when I slip. use my first name." onSave={(v: any) => api("set_instructions", { instructions: v }, "✓ rules updated")} saveLabel="Save rules" />
+        <Card id="rules" icon="🗣️" title="How she talks to you" open help="Standing rules for how she acts & sounds. Your rules beat her defaults, every message.">
+          <div className="corebox">
+            <div className="corelbl">always on (built in)</div>
+            {CORE_RULES.map((r) => <div key={r} className="corerule">✓ {r}</div>)}
+          </div>
+          <div className="yourlbl">your rules — edit or remove any, add as many as you want</div>
+          <RulesList
+            items={parseRules(s.custom_instructions)}
+            onSave={(items: string[]) => api("set_instruction_list", { items }, "✓ rules updated")}
+          />
         </Card>
 
         {/* KNOWS */}
@@ -171,8 +187,10 @@ export default function DashboardClient({ initial }: { initial: any }) {
         </Card>
 
         {/* REMINDERS */}
-        <Card id="reminders" icon="⏰" title="Reminders" count={d.reminders.length} help="Nudges at a specific time.">
-          {d.reminders.map((r: any) => <SimpleRow key={r.id} text={`${r.title} · ${new Date(r.due_at).toLocaleString()}${r.recurrence ? " (" + r.recurrence + ")" : ""}`} onDelete={() => del("reminder", r.id)} delLabel="cancel" />)}
+        <Card id="reminders" icon="⏰" title="Reminders" count={d.reminders.length} help="Nudges at a specific time. Tap edit to fix the wording or the time — changing a fact above won't move these, they're their own thing.">
+          {d.reminders.map((r: any) => (
+            <ReminderRow key={r.id} r={r} onSave={(body: any) => api("edit_reminder", { id: r.id, ...body }, "✓ reminder updated")} onDelete={() => del("reminder", r.id)} />
+          ))}
           {d.reminders.length === 0 ? <Empty text="No reminders set." /> : null}
           <ReminderAdd onAdd={(body: any) => api("add_reminder", body, "✓ reminder set")} />
         </Card>
@@ -259,12 +277,77 @@ function InlineRow({ value, onSave, onDelete }: any) {
     </div>
   );
 }
-function EditText({ initial, rows, placeholder, onSave, saveLabel }: any) {
-  const [v, setV] = useState(initial);
+// custom_instructions is stored as "- line\n- line"; show it as a real list
+function parseRules(blob: string): string[] {
+  return String(blob || "").split("\n").map((l) => l.replace(/^[-•\s]+/, "").trim()).filter(Boolean);
+}
+function RulesList({ items, onSave }: { items: string[]; onSave: (items: string[]) => Promise<boolean> | void }) {
+  const [list, setList] = useState<string[]>(items);
+  const [add, setAdd] = useState("");
+  // keep in sync when the server data refreshes under us
+  const [seed, setSeed] = useState(items.join(""));
+  if (items.join("") !== seed) { setSeed(items.join("")); setList(items); }
+  const commit = (next: string[]) => { setList(next); onSave(next); };
   return (
     <div>
-      <textarea className="ta" rows={rows || 3} value={v} onChange={(e) => setV(e.target.value)} placeholder={placeholder} />
-      <button className="btn ok" onClick={() => onSave(v)}>{saveLabel || "Save"}</button>
+      {list.length === 0 ? <div className="empty">No rules of your own yet — add one below.</div> : null}
+      {list.map((r, i) => (
+        <RuleRow key={i} value={r}
+          onSave={(v: string) => commit(list.map((x, j) => (j === i ? v : x)))}
+          onDelete={() => commit(list.filter((_, j) => j !== i))} />
+      ))}
+      <div className="frm mt">
+        <input className="in grow" placeholder="add a rule… e.g. no emojis before noon" value={add}
+          onChange={(e) => setAdd(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && add.trim()) { commit([...list, add.trim()]); setAdd(""); } }} />
+        <button className="btn ok" onClick={() => { if (add.trim()) { commit([...list, add.trim()]); setAdd(""); } }}>+ add rule</button>
+      </div>
+    </div>
+  );
+}
+function RuleRow({ value, onSave, onDelete }: any) {
+  const [v, setV] = useState(value);
+  const dirty = v.trim() !== value;
+  return (
+    <div className="row">
+      <input className="in grow" value={v} onChange={(e) => setV(e.target.value)} />
+      {dirty ? <button className="btn ok sm" onClick={() => onSave(v.trim())}>save</button> : null}
+      <button className="btn ghost sm" onClick={onDelete}>✕</button>
+    </div>
+  );
+}
+
+// ISO → the value a <input type="datetime-local"> expects, in the viewer's local time
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function ReminderRow({ r, onSave, onDelete }: any) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(r.title);
+  const [due, setDue] = useState(toLocalInput(r.due_at));
+  const overdue = new Date(r.due_at).getTime() < Date.now();
+  if (editing) {
+    return (
+      <div className="reditbox">
+        <input className="in" placeholder="remind me to…" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="in mt6" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+        <div className="pbactions">
+          <button className="btn ok sm" onClick={async () => { if (await onSave({ title, due_at: due })) setEditing(false); }}>save</button>
+          <button className="btn ghost sm" onClick={() => { setTitle(r.title); setDue(toLocalInput(r.due_at)); setEditing(false); }}>cancel</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="row">
+      <span>{r.title} <span className={overdue ? "od" : "dim"}>· {new Date(r.due_at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{overdue ? " (overdue)" : ""}</span>{r.recurrence ? <span className="dim"> ({r.recurrence})</span> : null}</span>
+      <span className="actions">
+        <button className="btn ghost sm" onClick={() => setEditing(true)}>edit</button>
+        <button className="btn danger sm" onClick={onDelete}>cancel</button>
+      </span>
     </div>
   );
 }
@@ -413,6 +496,12 @@ details[open] .chev{transform:rotate(180deg)}
 .abtile.on{background:#173021;border-color:#2b533c;color:var(--green)}
 .abicon{font-size:17px}
 .abcheck{position:absolute;right:10px;font-weight:800}
+.corebox{background:#12161d;border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin-bottom:14px}
+.corelbl{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim3);font-weight:700;margin-bottom:8px}
+.corerule{font-size:13.5px;color:var(--dim2);line-height:1.6;padding:1px 0}
+.yourlbl{font-size:13px;color:var(--accent);font-weight:700;margin:2px 0 8px}
+.reditbox{border:1px solid #35425f;border-radius:12px;padding:12px;margin-bottom:8px;background:#12161d}
+.od{color:var(--red);font-size:13px}
 .pbcard{border:1px solid #22262f;border-radius:12px;padding:13px;margin-bottom:10px}
 .pbhead{font-size:15px;margin-bottom:9px}
 .pbactions{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
