@@ -48,9 +48,10 @@ const TOOL: any = {
 
 const iso = (s: string) => new Date(s).toISOString(); // throws on bad input → caller's try/catch skips it
 
-export async function organizeDump(userId: string, text: string): Promise<{ ok: boolean; summary: string }> {
+export async function organizeDump(userId: string, text: string, area?: string | null): Promise<{ ok: boolean; summary: string }> {
   const body = (text || "").trim();
   if (!body) return { ok: false, summary: "nothing to organize" };
+  const tag = area || null; // stamp every filed item with the active life-area, if any
 
   // give the model the real clock so dates/times come out right (was hallucinating past years).
   let tz = "America/New_York";
@@ -85,21 +86,21 @@ export async function organizeDump(userId: string, text: string): Promise<{ ok: 
       if (it.type === "instruction" && it.text) { instructions.push(it.text.trim()); done.instruction++; }
       else if (it.type === "fact" && it.value) {
         await db.from("facts").upsert(
-          { user_id: userId, category: (it.category || "general").toLowerCase().trim(), key: (it.key || it.value).slice(0, 60).trim(), value: it.value, source: "dashboard-dump", updated_at: new Date().toISOString() },
+          { user_id: userId, category: (it.category || "general").toLowerCase().trim(), key: (it.key || it.value).slice(0, 60).trim(), value: it.value, source: "dashboard-dump", area: tag, updated_at: new Date().toISOString() },
           { onConflict: "user_id,category,key" }
         );
         done.fact++;
       } else if (it.type === "goal" && it.title) {
-        await db.from("goals").insert({ user_id: userId, title: it.title, detail: it.detail || null });
+        await db.from("goals").insert({ user_id: userId, title: it.title, detail: it.detail || null, area: tag });
         done.goal++;
       } else if (it.type === "playbook" && it.name && it.instructions) {
         await db.from("playbooks").upsert(
-          { user_id: userId, name: it.name.trim(), trigger: it.trigger || null, instructions: it.instructions, active: true, updated_at: new Date().toISOString() },
+          { user_id: userId, name: it.name.trim(), trigger: it.trigger || null, instructions: it.instructions, active: true, area: tag, updated_at: new Date().toISOString() },
           { onConflict: "user_id,name" }
         );
         done.playbook++;
       } else if (it.type === "reminder" && it.title && it.due_at) {
-        await db.from("reminders").insert({ user_id: userId, title: it.title, due_at: iso(it.due_at), location: it.location || null });
+        await db.from("reminders").insert({ user_id: userId, title: it.title, due_at: iso(it.due_at), location: it.location || null, area: tag });
         done.reminder++;
       } else if (it.type === "place" && it.name && it.address) {
         await db.from("places").upsert({ user_id: userId, name: it.name.toLowerCase().trim(), address: it.address }, { onConflict: "user_id,name" });

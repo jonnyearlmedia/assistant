@@ -34,6 +34,9 @@ const CORE_RULES = [
   "everything she knows lives in this dashboard — all of it editable",
 ];
 
+// one-tap starting areas (his own list) — shown only until he's added them
+const SUGGESTED_AREAS = ["School", "VPH", "Shoots", "Work", "Therapy", "Appointments", "Workouts"];
+
 const EXAMPLES = [
   "call me jonny, not jonathan",
   "gym at 6am mon / wed / fri",
@@ -59,6 +62,8 @@ export default function DashboardClient({ initial }: { initial: any }) {
   const [toast, setToast] = useState("");
   const [dump, setDump] = useState("");
   const [sorting, setSorting] = useState("");
+  const [area, setArea] = useState<string>(""); // "" = All
+  const [manageAreas, setManageAreas] = useState(false);
 
   async function refresh() {
     try {
@@ -94,7 +99,7 @@ export default function DashboardClient({ initial }: { initial: any }) {
     if (!dump.trim()) return;
     setSorting("sorting…");
     try {
-      const r = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "organize", text: dump }) });
+      const r = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "organize", text: dump, area: area || undefined }) });
       const j = await r.json().catch(() => ({}));
       setSorting((j.ok ? "✓ " : "") + (j.summary || j.error || "done"));
       if (j.ok) { setDump(""); await refresh(); }
@@ -104,8 +109,29 @@ export default function DashboardClient({ initial }: { initial: any }) {
   }
 
   const s = d.settings || {};
+  const areas: any[] = d.areas || [];
+  const areaName = (id: string) => areas.find((a) => a.id === id)?.name || id;
+  const activeArea = areas.find((a) => a.id === area);
+  const inArea = (it: any) => !area || it.area === area; // "" = All shows everything
+  // area-filtered collections (used everywhere so counts + lists agree)
+  const fFacts = d.facts.filter(inArea);
+  const fGoals = d.goals.filter(inArea);
+  const fPlaybooks = d.playbooks.filter(inArea);
+  const fReminders = d.reminders.filter(inArea);
+  const fSubagents = d.subagents.filter(inArea);
+  const scoped = !!area; // a specific area is selected → hide global-only cards
   const factsByCat: Record<string, any[]> = {};
-  for (const f of d.facts) (factsByCat[f.category] ||= []).push(f);
+  for (const f of fFacts) (factsByCat[f.category] ||= []).push(f);
+  // pass the active area into any create/tag call
+  const withArea = (body: any) => (area ? { ...body, area } : body);
+  // compact per-row "which area" picker (only shown once he has areas)
+  const AreaSel = ({ kind, it }: any) =>
+    areas.length ? (
+      <select className="areasel" value={it.area || ""} onChange={(e) => api("set_area", { kind, id: it.id, area: e.target.value }, "✓ filed")}>
+        <option value="">· area ·</option>
+        {areas.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+      </select>
+    ) : null;
 
   return (
     <main>
@@ -118,89 +144,115 @@ export default function DashboardClient({ initial }: { initial: any }) {
         <div className="wrap">
           <div className="nav">{NAV.map(([id, label]) => <a key={id} href={`#${id}`} className="navpill">{label}</a>)}</div>
         </div>
+        <div className="wrap">
+          <div className="areabar">
+            <button className={`areapill ${area === "" ? "on" : ""}`} onClick={() => setArea("")}>All</button>
+            {areas.map((a: any) => (
+              <button key={a.id} className={`areapill ${area === a.id ? "on" : ""}`} onClick={() => setArea(a.id)}>
+                <span className="aemoji">{a.emoji || "🗂️"}</span>{a.name}
+              </button>
+            ))}
+            <button className="areapill add" onClick={() => setManageAreas((v) => !v)}>＋ areas</button>
+          </div>
+        </div>
       </div>
 
       <div className="wrap body">
-        <p className="lead">Your assistant, your way. Not sure where something goes? Just tell her below — she'll sort it.</p>
+        {manageAreas ? (
+          <AreaManager areas={areas} onAdd={(b: any) => api("add_area", b, "✓ area added")} onEdit={(b: any) => api("edit_area", b, "✓ renamed")} onDelete={(id: string) => { if (confirm("Delete this area? Its items stay, they just lose the tag.")) api("delete_area", { id }, "area removed"); }} onClose={() => setManageAreas(false)} />
+        ) : null}
+
+        <p className="lead">
+          {scoped
+            ? <>Showing just <b>{activeArea?.emoji} {activeArea?.name}</b>. Anything you add here is filed into it automatically.</>
+            : <>Your assistant, your way. Pick an area up top to focus, or just tell her anything below — she'll sort it.</>}
+        </p>
 
         {/* HERO */}
         <div className="hero">
-          <div className="herohead">✍️ Tell me anything</div>
-          <div className="herohelp">Write it however you want. She figures out if it's a rule, a fact, a goal, a reminder, or a how-to — and files it.</div>
+          <div className="herohead">✍️ Tell me anything{scoped ? ` · ${activeArea?.name}` : ""}</div>
+          <div className="herohelp">Write it however you want. She figures out if it's a rule, a fact, a goal, a reminder, or a how-to — and files it{scoped ? <> under <b>{activeArea?.name}</b></> : ""}.</div>
           <textarea className="ta big" rows={4} value={dump} onChange={(e) => setDump(e.target.value)} placeholder={"e.g. call me jonny. gym at 6am mon/wed/fri. remind me to renew my license next friday."} />
           <div className="chipsrow">{EXAMPLES.map((ex) => <button key={ex} className="exchip" onClick={() => setDump((v) => (v ? v + "\n" : "") + ex)}>+ {ex}</button>)}</div>
-          <button className="btn primary" onClick={sortDump}>Sort it for me →</button>
+          <button className="btn primary" onClick={sortDump}>Sort it for me{scoped ? ` into ${activeArea?.name}` : ""} →</button>
           {sorting ? <div className="sortres">{sorting}</div> : null}
         </div>
 
-        {/* RULES */}
-        <Card id="rules" icon="🗣️" title="How she talks to you" open help="Standing rules for how she acts & sounds. Your rules beat her defaults, every message.">
-          <div className="corebox">
-            <div className="corelbl">always on (built in)</div>
-            {CORE_RULES.map((r) => <div key={r} className="corerule">✓ {r}</div>)}
-          </div>
-          <div className="yourlbl">your rules — edit or remove any, add as many as you want</div>
-          <RulesList
-            items={parseRules(s.custom_instructions)}
-            onSave={(items: string[]) => api("set_instruction_list", { items }, "✓ rules updated")}
-          />
-        </Card>
+        {/* RULES (global — only under All) */}
+        {!scoped ? (
+          <Card id="rules" icon="🗣️" title="How she talks to you" open help="Standing rules for how she acts & sounds. Your rules beat her defaults, every message.">
+            <div className="corebox">
+              <div className="corelbl">always on (built in)</div>
+              {CORE_RULES.map((r) => <div key={r} className="corerule">✓ {r}</div>)}
+            </div>
+            <div className="yourlbl">your rules — edit or remove any, add as many as you want</div>
+            <RulesList
+              items={parseRules(s.custom_instructions)}
+              onSave={(items: string[]) => api("set_instruction_list", { items }, "✓ rules updated")}
+            />
+          </Card>
+        ) : null}
 
         {/* KNOWS */}
-        <Card id="knows" icon="🧠" title="What she knows about you" count={d.facts.length} help="Things to remember about you. Type anything — no format needed.">
+        <Card id="knows" icon="🧠" title="What she knows about you" count={fFacts.length} help="Things to remember about you. Type anything — no format needed.">
           {Object.keys(factsByCat).sort().map((cat) => (
             <div key={cat} className="catgrp">
               <div className="catname">{cat}</div>
               {factsByCat[cat].map((f: any) => (
-                <InlineRow key={f.id} value={f.value} onSave={(v: any) => api("edit_fact", { id: f.id, value: v }, "✓ updated")} onDelete={() => del("fact", f.id)} />
+                <InlineRow key={f.id} value={f.value} onSave={(v: any) => api("edit_fact", { id: f.id, value: v }, "✓ updated")} onDelete={() => del("fact", f.id)} extra={<AreaSel kind="fact" it={f} />} />
               ))}
             </div>
           ))}
-          {d.facts.length === 0 ? <Empty text="Nothing yet — add something she should remember." /> : null}
-          <AddRow fields={[{ name: "category", ph: "topic (optional)", w: 120 }, { name: "value", ph: "something she should remember…", grow: true }]} onAdd={(vals: any) => api("add_fact", vals, "✓ added")} />
+          {fFacts.length === 0 ? <Empty text={scoped ? "Nothing filed here yet — add something below." : "Nothing yet — add something she should remember."} /> : null}
+          <AddRow fields={[{ name: "category", ph: "topic (optional)", w: 120 }, { name: "value", ph: "something she should remember…", grow: true }]} onAdd={(vals: any) => api("add_fact", withArea(vals), "✓ added")} />
         </Card>
 
         {/* GOALS */}
-        <Card id="goals" icon="🎯" title="Your goals" count={d.goals.length} help="What you're working toward. She keeps you honest.">
-          {d.goals.map((g: any) => <SimpleRow key={g.id} text={`${g.title}${g.detail ? " — " + g.detail : ""}`} onDelete={() => del("goal", g.id)} delLabel="drop" />)}
-          {d.goals.length === 0 ? <Empty text="No goals set. What are you working toward?" /> : null}
-          <AddRow fields={[{ name: "title", ph: "a goal…", grow: true }, { name: "detail", ph: "detail (optional)", grow: true }]} onAdd={(vals: any) => api("add_goal", vals, "✓ added")} />
+        <Card id="goals" icon="🎯" title="Your goals" count={fGoals.length} help="What you're working toward. She keeps you honest.">
+          {fGoals.map((g: any) => <SimpleRow key={g.id} text={`${g.title}${g.detail ? " — " + g.detail : ""}`} onDelete={() => del("goal", g.id)} delLabel="drop" extra={<AreaSel kind="goal" it={g} />} />)}
+          {fGoals.length === 0 ? <Empty text="No goals set. What are you working toward?" /> : null}
+          <AddRow fields={[{ name: "title", ph: "a goal…", grow: true }, { name: "detail", ph: "detail (optional)", grow: true }]} onAdd={(vals: any) => api("add_goal", withArea(vals), "✓ added")} />
         </Card>
 
         {/* HELPERS */}
-        <Card id="helpers" icon="🤖" title="Your helpers" count={d.subagents.length} help="Little specialists she hands specific jobs to. She has built-in ones already; build your own and just flip on what it can touch.">
-          {d.subagents.map((sa: any) => (
+        <Card id="helpers" icon="🤖" title="Your helpers" count={fSubagents.length} help="Little specialists she hands specific jobs to. She has built-in ones already; build your own and just flip on what it can touch.">
+          {fSubagents.map((sa: any) => (
             <div key={sa.id} className="hrow">
               <div><div className="hname">{sa.name}</div>{sa.brief ? <div className="dim2">{sa.brief}</div> : null}<div className="dim3">can use: {abilitiesFor(sa.tools || [])}</div></div>
-              <button className="btn danger sm" onClick={() => del("subagent", sa.id)}>delete</button>
+              <span className="actions"><AreaSel kind="subagent" it={sa} /><button className="btn danger sm" onClick={() => del("subagent", sa.id)}>delete</button></span>
             </div>
           ))}
-          <HelperBuilder onBuild={(body: any) => api("save_subagent", body, "✓ helper built")} />
+          {scoped && fSubagents.length === 0 ? <div className="suggesthelp">No {activeArea?.name} helper yet — build one below and it'll handle {activeArea?.name} jobs for you.</div> : null}
+          <HelperBuilder seedName={scoped ? activeArea?.name : ""} onBuild={(body: any) => api("save_subagent", withArea(body), "✓ helper built")} />
         </Card>
 
         {/* HOW-TOS */}
-        <Card id="howtos" icon="📋" title="How-tos" count={d.playbooks.length} help="Things you've taught her to do a certain way. Edit any of them right here.">
-          {d.playbooks.map((p: any) => (
-            <PlaybookRow key={p.id} p={p} onSave={(body: any) => api("save_playbook", body, "✓ updated")} onToggle={() => api("toggle_playbook", { id: p.id, active: !p.active }, p.active ? "paused" : "resumed")} onDelete={() => del("playbook", p.id)} />
+        <Card id="howtos" icon="📋" title="How-tos" count={fPlaybooks.length} help="Things you've taught her to do a certain way. Edit any of them right here.">
+          {fPlaybooks.map((p: any) => (
+            <PlaybookRow key={p.id} p={p} onSave={(body: any) => api("save_playbook", withArea(body), "✓ updated")} onToggle={() => api("toggle_playbook", { id: p.id, active: !p.active }, p.active ? "paused" : "resumed")} onDelete={() => del("playbook", p.id)} extra={<AreaSel kind="playbook" it={p} />} />
           ))}
-          {d.playbooks.length === 0 ? <Empty text="None yet. Teach her a routine (or just use the box at the top)." /> : null}
-          <NewPlaybook onSave={(body: any) => api("save_playbook", body, "✓ created")} />
+          {fPlaybooks.length === 0 ? <Empty text="None yet. Teach her a routine (or just use the box at the top)." /> : null}
+          <NewPlaybook onSave={(body: any) => api("save_playbook", withArea(body), "✓ created")} />
         </Card>
 
-        {/* MOOD */}
-        <Card id="mood" icon="🧠" title="Mood check-ins" open={(d.moods || []).length === 0} help="She texts you once per 4-hour block (at a random time inside it), reads a 1–10 + a word + a quick why, and logs it to your health_mood tracker — the heatmap you show in therapy.">
-          <MoodSection d={d} onSave={(body: any) => api("set_mood", body, "✓ mood check-ins saved")} />
-        </Card>
+        {/* MOOD (global — only under All) */}
+        {!scoped ? (
+          <Card id="mood" icon="🧠" title="Mood check-ins" open={(d.moods || []).length === 0} help="She texts you once per 4-hour block (at a random time inside it), reads a 1–10 + a word + a quick why, and logs it to your health_mood tracker — the heatmap you show in therapy.">
+            <MoodSection d={d} onSave={(body: any) => api("set_mood", body, "✓ mood check-ins saved")} />
+          </Card>
+        ) : null}
 
         {/* REMINDERS */}
-        <Card id="reminders" icon="⏰" title="Reminders" count={d.reminders.length} help="Nudges at a specific time. Tap edit to fix the wording or the time — changing a fact above won't move these, they're their own thing.">
-          {d.reminders.map((r: any) => (
-            <ReminderRow key={r.id} r={r} onSave={(body: any) => api("edit_reminder", { id: r.id, ...body }, "✓ reminder updated")} onDelete={() => del("reminder", r.id)} />
+        <Card id="reminders" icon="⏰" title="Reminders" count={fReminders.length} help="Nudges at a specific time. Tap edit to fix the wording or the time — changing a fact above won't move these, they're their own thing.">
+          {fReminders.map((r: any) => (
+            <ReminderRow key={r.id} r={r} onSave={(body: any) => api("edit_reminder", { id: r.id, ...body }, "✓ reminder updated")} onDelete={() => del("reminder", r.id)} extra={<AreaSel kind="reminder" it={r} />} />
           ))}
-          {d.reminders.length === 0 ? <Empty text="No reminders set." /> : null}
-          <ReminderAdd onAdd={(body: any) => api("add_reminder", body, "✓ reminder set")} />
+          {fReminders.length === 0 ? <Empty text="No reminders set." /> : null}
+          <ReminderAdd onAdd={(body: any) => api("add_reminder", withArea(body), "✓ reminder set")} />
         </Card>
 
+        {/* the rest are global — only shown under All */}
+        {!scoped ? <>
         {/* PROMISES */}
         <Card id="promises" icon="🤝" title="Promises you made" count={d.commitments.length} help="Things you said you'd do — she follows up.">
           {d.commitments.map((c: any) => (
@@ -251,6 +303,7 @@ export default function DashboardClient({ initial }: { initial: any }) {
           <div className="dim">this week: {d.spendWeek != null ? `~$${d.spendWeek.toFixed(2)}` : "—"} · {d.deadJobs ? `⚠️ ${d.deadJobs} failed jobs` : "✓ running clean"}</div>
           <div className="msgs">{d.messages.map((m: any, i: number) => <div key={i} className="msg"><b className={m.direction === "inbound" ? "you" : "her"}>{m.direction === "inbound" ? "you" : "lexa"}:</b> {(m.body || "").slice(0, 130)}</div>)}</div>
         </Card>
+        </> : null}
       </div>
 
       <div className={`toast ${toast ? "show" : ""}`}>{toast}</div>
@@ -269,17 +322,20 @@ function Card({ id, icon, title, count, help, open, children }: any) {
   );
 }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div>; }
-function SimpleRow({ text, onDelete, delLabel }: any) {
-  return <div className="row"><span>{text}</span><button className="btn ghost sm" onClick={onDelete}>{delLabel || "✕"}</button></div>;
+function SimpleRow({ text, onDelete, delLabel, extra }: any) {
+  return <div className="row"><span>{text}</span><span className="actions">{extra}<button className="btn ghost sm" onClick={onDelete}>{delLabel || "✕"}</button></span></div>;
 }
-function InlineRow({ value, onSave, onDelete }: any) {
+function InlineRow({ value, onSave, onDelete, extra }: any) {
   const [v, setV] = useState(value);
   const dirty = v !== value;
   return (
     <div className="row">
       <input className="in grow" value={v} onChange={(e) => setV(e.target.value)} />
-      {dirty ? <button className="btn ok sm" onClick={() => onSave(v)}>save</button> : null}
-      <button className="btn ghost sm" onClick={onDelete}>✕</button>
+      <span className="actions">
+        {dirty ? <button className="btn ok sm" onClick={() => onSave(v)}>save</button> : null}
+        {extra}
+        <button className="btn ghost sm" onClick={onDelete}>✕</button>
+      </span>
     </div>
   );
 }
@@ -330,7 +386,7 @@ function toLocalInput(iso: string): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function ReminderRow({ r, onSave, onDelete }: any) {
+function ReminderRow({ r, onSave, onDelete, extra }: any) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(r.title);
   const [due, setDue] = useState(toLocalInput(r.due_at));
@@ -351,6 +407,7 @@ function ReminderRow({ r, onSave, onDelete }: any) {
     <div className="row">
       <span>{r.title} <span className={overdue ? "od" : "dim"}>· {new Date(r.due_at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{overdue ? " (overdue)" : ""}</span>{r.recurrence ? <span className="dim"> ({r.recurrence})</span> : null}</span>
       <span className="actions">
+        {extra}
         <button className="btn ghost sm" onClick={() => setEditing(true)}>edit</button>
         <button className="btn danger sm" onClick={onDelete}>cancel</button>
       </span>
@@ -376,8 +433,8 @@ function ReminderAdd({ onAdd }: any) {
     </div>
   );
 }
-function HelperBuilder({ onBuild }: any) {
-  const [name, setName] = useState(""); const [brief, setBrief] = useState(""); const [caps, setCaps] = useState<string[]>([]);
+function HelperBuilder({ onBuild, seedName }: any) {
+  const [name, setName] = useState(seedName || ""); const [brief, setBrief] = useState(""); const [caps, setCaps] = useState<string[]>([]);
   const toggle = (c: string) => setCaps((x) => x.includes(c) ? x.filter((y) => y !== c) : [...x, c]);
   return (
     <div className="builder">
@@ -396,7 +453,7 @@ function HelperBuilder({ onBuild }: any) {
     </div>
   );
 }
-function PlaybookRow({ p, onSave, onToggle, onDelete }: any) {
+function PlaybookRow({ p, onSave, onToggle, onDelete, extra }: any) {
   const [trigger, setTrigger] = useState(p.trigger || ""); const [instr, setInstr] = useState(p.instructions);
   const auto = (p.format || {}).automation;
   return (
@@ -408,6 +465,7 @@ function PlaybookRow({ p, onSave, onToggle, onDelete }: any) {
         <button className="btn ok sm" onClick={() => onSave({ name: p.name, trigger, instructions: instr })}>save</button>
         <button className="btn ghost sm" onClick={onToggle}>{p.active ? "pause" : "resume"}</button>
         <button className="btn danger sm" onClick={onDelete}>delete</button>
+        {extra}
       </div>
     </div>
   );
@@ -437,6 +495,47 @@ function SettingsForm({ d, onSave }: any) {
         <label className="lbl">home address<input className="in" value={f.home_address} onChange={(e) => set("home_address", e.target.value)} /></label>
       </div>
       <button className="btn ok wide mt6" onClick={() => onSave(f)}>Save settings</button>
+    </div>
+  );
+}
+
+function AreaManager({ areas, onAdd, onEdit, onDelete, onClose }: any) {
+  const [name, setName] = useState("");
+  const [emoji, setEmoji] = useState("");
+  const have = new Set(areas.map((a: any) => String(a.name).toLowerCase()));
+  const add = () => { if (name.trim()) { onAdd({ name: name.trim(), emoji }); setName(""); setEmoji(""); } };
+  return (
+    <div className="amgr">
+      <div className="amgrhead"><b>Your areas</b><button className="btn ghost sm" onClick={onClose}>done</button></div>
+      <div className="amgrhelp">Tabs for the parts of your life. Add as many as you want — then click one up top to see only its stuff and file straight into it.</div>
+      {areas.map((a: any) => <AreaEditRow key={a.id} a={a} onEdit={onEdit} onDelete={onDelete} />)}
+      <div className="frm mt">
+        <input className="in" style={{ maxWidth: 64, textAlign: "center" }} placeholder="🗂️" value={emoji} onChange={(e) => setEmoji(e.target.value)} />
+        <input className="in grow" placeholder="new area name…" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} />
+        <button className="btn ok" onClick={add}>+ add</button>
+      </div>
+      {SUGGESTED_AREAS.filter((sug) => !have.has(sug.toLowerCase())).length ? (
+        <div className="chipsrow">
+          {SUGGESTED_AREAS.filter((sug) => !have.has(sug.toLowerCase())).map((sug) => (
+            <button key={sug} className="exchip" onClick={() => onAdd({ name: sug })}>+ {sug}</button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+function AreaEditRow({ a, onEdit, onDelete }: any) {
+  const [name, setName] = useState(a.name);
+  const [emoji, setEmoji] = useState(a.emoji || "🗂️");
+  const dirty = name !== a.name || emoji !== (a.emoji || "🗂️");
+  return (
+    <div className="row">
+      <input className="in" style={{ maxWidth: 56, textAlign: "center" }} value={emoji} onChange={(e) => setEmoji(e.target.value)} />
+      <input className="in grow" value={name} onChange={(e) => setName(e.target.value)} />
+      <span className="actions">
+        {dirty ? <button className="btn ok sm" onClick={() => onEdit({ id: a.id, name, emoji })}>save</button> : null}
+        <button className="btn ghost sm" onClick={() => onDelete(a.id)}>✕</button>
+      </span>
     </div>
   );
 }
@@ -528,6 +627,17 @@ main{font-family:-apple-system,system-ui,"Segoe UI",sans-serif;background:var(--
 .nav{display:flex;gap:7px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
 .navpill{flex:0 0 auto;font-size:13px;color:var(--dim2);background:#20242e;border:1px solid var(--bd);border-radius:20px;padding:6px 12px;text-decoration:none;white-space:nowrap}
+.areabar{display:flex;gap:7px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
+.areabar::-webkit-scrollbar{display:none}
+.areapill{flex:0 0 auto;font-size:13.5px;font-weight:600;color:var(--dim2);background:#161a22;border:1px solid var(--bd);border-radius:10px;padding:7px 13px;cursor:pointer;white-space:nowrap;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
+.areapill.on{background:var(--accent);color:#0c1424;border-color:var(--accent)}
+.areapill.add{color:var(--accent);border-style:dashed}
+.aemoji{font-size:14px}
+.areasel{background:var(--in);border:1px solid var(--bd);color:var(--dim2);border-radius:9px;padding:7px 8px;font-size:12.5px;font-family:inherit;max-width:120px}
+.amgr{background:var(--card);border:1px solid #35425f;border-radius:16px;padding:16px;margin-bottom:16px}
+.amgrhead{display:flex;justify-content:space-between;align-items:center;font-size:17px}
+.amgrhelp{font-size:13.5px;color:var(--dim);line-height:1.5;margin:6px 0 12px}
+.suggesthelp{font-size:13.5px;color:var(--dim2);background:#12161d;border:1px solid var(--bd);border-radius:10px;padding:10px 12px;margin:10px 0}
 .body{padding:18px 16px 90px}
 .lead{color:var(--dim);font-size:15px;line-height:1.5;margin:0 0 16px}
 .hero{background:linear-gradient(155deg,#232c42,#191c23);border:1px solid #35425f;border-radius:18px;padding:18px;margin-bottom:16px}
