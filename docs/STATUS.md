@@ -13,6 +13,13 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - File ingestion: reads `.md/.txt/.csv/json` attachments
 
 **Brain / memory**
+- **Auto-recall (retrieval-augmented context)** — every `think()` loads the last 40 messages AND
+  automatically keyword-searches his FULL history for older messages relevant to what he just said,
+  injecting them as a volatile system block (after the cache breakpoint, so caching is intact). She
+  no longer has to *choose* to `recall` — the relevant past is fed in every turn. Ranked by
+  keyword-match count then recency (`retrieveRelevantMessages` in `lib/memory.ts`). This fixed the
+  "we talked last night / not even a trace of it" amnesia: the convo was always in `messages`, she
+  was just blind to anything past the recent window.
 - Editable memory: facts (add/edit/forget), goals, playbooks (learn workflows by text)
 - Task-routing guidance (TickTick vs Notion MASTER PLANNER vs short-term)
 - Verified-writes, backbone, "say limits once" — all in `lib/persona.ts`
@@ -22,7 +29,9 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - **TickTick** — create (into a named list), read (today/week/all + overdue + undated backlog),
   complete, update (reschedule/rename/reprioritize/**move between lists**), delete, list projects
 - **Notion** — search all, read any page, query any db, create row in any db (schema-aware → health_mood),
-  append to any page, Master Planner create/list
+  append to any page, **archive/delete any page** (verified — cleans up duplicate rows), Master Planner create/list.
+  Mood logging DEDUPES on date+block (one entry per block — re-logging updates, never duplicates) and titles
+  entries with jonny's em-dash convention ("Mood — Late Night — Jul 6").
 - **Gmail** (both inboxes: jonnyearl + jonathanmurao) — search, **send**, **draft**
 - **Google Calendar** — list upcoming, create, update/reschedule/move, delete
 - **Google Drive** — search + read file contents (Docs export + text)
@@ -64,7 +73,9 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   exposed and briefs render "from X until Y"; (3) 8 duplicate past-event tasks deleted from TickTick.
   Watch: GitHub cron is best-effort — if ticks prove flaky, move to Supabase pg_cron hitting the
   tick URL (needs the Vercel bypass secret from jonny once).
-- Due reminders + "leave now" (with drive time)
+- Due reminders + "leave now" (with drive time). Scheduling is timezone-safe: `due_at` is taken as
+  jonny's LOCAL wall-clock and normalized to a correct UTC instant (DST-aware) before storage, so
+  "5:15am" fires at 5:15am PT — not 10:15pm. Reminders can be cancelled/deleted by id (`cancel_reminder`).
 - Morning brief (TickTick + Notion + Calendar + unread email)
 - First-days learning + evening check-in
 - User-defined automations (`create_automation` → scheduled, runs full tool loop)

@@ -154,6 +154,22 @@ create table if not exists jobs (
   created_at  timestamptz not null default now()
 );
 
+-- episodic memory: one compressed recap per day of conversation. a nightly job reads the day's
+-- messages, extracts durable facts (saved into `facts`), and writes a short digest here. these are
+-- fed into her context as cheap, cacheable "recent days" memory so she isn't relying on raw-message
+-- recall alone — and decisions/plans from a past day survive even after the messages scroll off.
+create table if not exists conversation_digests (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references users(id) on delete cascade,
+  day         date not null,                       -- the local calendar day this recaps
+  digest      text not null,                       -- short "what we discussed / decided / open" recap
+  msg_count   int not null default 0,              -- how many messages it was built from
+  updated_at  timestamptz not null default now(),
+  created_at  timestamptz not null default now(),
+  unique (user_id, day)
+);
+create index if not exists idx_digests_user_day on conversation_digests(user_id, day desc);
+
 -- per-service standalone credentials (each integration auths on its own, not via this chat)
 create table if not exists integrations (
   id            uuid primary key default gen_random_uuid(),

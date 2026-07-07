@@ -106,14 +106,53 @@ export async function listPlaybooks(userId: string) {
   return data ?? [];
 }
 
+// tz offset (ms, + = ahead of UTC) for a given instant in an IANA timezone. no date lib.
+function tzOffsetMs(instant: Date, tz: string): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const p: any = Object.fromEntries(dtf.formatToParts(instant).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +(p.hour === "24" ? 0 : p.hour), +p.minute, +p.second);
+  return asUtc - instant.getTime();
+}
+
+// Interpret a wall-clock ISO string (no offset) as local time in `tz` → a correct UTC instant.
+// Fixes the reminder timezone bug: the model emits naive local times ("2026-07-08T05:15"), which
+// Postgres was reading as UTC. We resolve the offset (DST-aware) and store a real UTC timestamp.
+export function normalizeDueAt(dueAt: string, tz?: string): string {
+  const s = String(dueAt || "").trim();
+  // already offset-qualified (ends in Z or ±HH:MM / ±HHMM) → it's an absolute instant, trust it.
+  if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) throw new Error(`bad due_at: ${dueAt}`);
+    return d.toISOString();
+  }
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) throw new Error(`bad due_at: ${dueAt}`);
+    return d.toISOString();
+  }
+  const [, y, mo, d, hh = "0", mi = "0", ss = "0"] = m;
+  const zone = tz || "America/New_York";
+  const guess = Date.UTC(+y, +mo - 1, +d, +hh, +mi, +ss); // wall clock read as if UTC
+  // subtract the offset to land on the true instant; re-check at that instant for DST edges.
+  const off1 = tzOffsetMs(new Date(guess), zone);
+  const off2 = tzOffsetMs(new Date(guess - off1), zone);
+  return new Date(guess - off2).toISOString();
+}
+
 export async function scheduleReminder(
   userId: string,
-  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string; area?: string | null }
+  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string; area?: string | null },
+  tz?: string
 ) {
-  const { area, ...rest } = r;
+  const { area, due_at, ...rest } = r;
   const { data, error } = await db
     .from("reminders")
-    .insert({ user_id: userId, ...rest, area: areaSlug(area) })
+    .insert({ user_id: userId, ...rest, due_at: normalizeDueAt(due_at, tz), area: areaSlug(area) })
     .select("id,title,due_at,lead_time_min,location")
     .single();
   if (error) throw new Error(`scheduleReminder: ${error.message}`);
@@ -273,29 +312,125 @@ export async function deleteUserSubagent(userId: string, name: string) {
   return { removed: data?.length ?? 0 };
 }
 
-// memory_query: search jonny's FULL history (not just the recent ~20-msg window) + his facts,
-// for when he references something older than what's already in context. substring match — simple,
-// but enough to surface "what did i say about X" / "that thing from last week".
+// stopwords + a tokenizer for keyword search. we keep only meaningful words so a reference like
+// "didn't i tell you last night about the mood log texts" searches on mood/log/texts, not on
+// every message that happens to contain "last"/"night"/"about".
+const STOPWORDS = new Set(
+  ("the a an and or but of to in on at for with about from as is are was were be been being am " +
+    "i you he she it we they me my mine your yours his her hers our ours their theirs this that these those " +
+    "what when where why how who which do did does done not no nor yeah yep nope ok okay just so if then " +
+    "than too very can could would should will wont cant dont didnt havent hasnt now today tonight yesterday " +
+    "tomorrow last night day time get got go going gonna wanna like know think say said tell told u ur")
+    .split(/\s+/)
+);
+
+// pull the useful keywords out of a chunk of text (deduped, capped, short/stopword-filtered).
+export function keywords(text: string, max = 12): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of String(text || "").toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || STOPWORDS.has(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// AUTO-RECALL: given what jonny just said, surface older messages from his FULL history that look
+// relevant — so the brain always sees the past conversation instead of only the last ~40 messages.
+// beforeIso excludes whatever's already loaded as recent context (no duplication). This is the
+// backbone of lexa's memory: she no longer has to *decide* to remember; relevant history is fed in.
+export async function retrieveRelevantMessages(
+  userId: string,
+  text: string,
+  opts: { beforeIso?: string; limit?: number } = {}
+): Promise<{ direction: string; body: string; created_at: string }[]> {
+  const kws = keywords(text);
+  if (!kws.length) return [];
+  let q = db.from("messages").select("direction,body,created_at").eq("user_id", userId);
+  if (opts.beforeIso) q = q.lt("created_at", opts.beforeIso);
+  // OR across keywords — tokens are alphanumeric only, so this is safe in PostgREST's .or() syntax
+  q = q.or(kws.map((k) => `body.ilike.%${k}%`).join(","));
+  // pull a wide candidate set, then rank by RELEVANCE (how many distinct keywords a message hits)
+  // before recency — so a dense earlier discussion beats a recent message that only grazed one word.
+  const { data } = await q.order("created_at", { ascending: false }).limit(60);
+  const limit = opts.limit ?? 8;
+  const scored = ((data ?? []) as any[]).map((m) => {
+    const b = String(m.body || "").toLowerCase();
+    return { m, score: kws.reduce((n, k) => n + (b.includes(k) ? 1 : 0), 0), t: new Date(m.created_at).getTime() };
+  });
+  scored.sort((a, z) => z.score - a.score || z.t - a.t); // relevance desc, then most-recent
+  return scored
+    .slice(0, limit)
+    .map((s) => s.m)
+    .sort((a, z) => new Date(a.created_at).getTime() - new Date(z.created_at).getTime()); // chrono for reading
+}
+
+// memory_query: search jonny's FULL history (not just the recent window) + his facts, for when he
+// references something older than what's already in context. keyword OR-match (was a single
+// substring) so multi-word references like "the mood log flow" actually hit.
 export async function searchMemory(userId: string, query: string, limit = 8) {
   const q = (query || "").trim();
   if (!q) return { messages: [], facts: [] };
-  const like = `%${q}%`;
+  const kws = keywords(query);
+  const msgOr = (kws.length ? kws : [q]).map((k) => `body.ilike.%${k}%`).join(",");
+  const factOr = (kws.length ? kws : [q]).flatMap((k) => [`key.ilike.%${k}%`, `value.ilike.%${k}%`]).join(",");
   const [msgs, fcts] = await Promise.all([
     db
       .from("messages")
       .select("direction,body,created_at")
       .eq("user_id", userId)
-      .ilike("body", like)
+      .or(msgOr)
       .order("created_at", { ascending: false })
       .limit(limit),
     db
       .from("facts")
       .select("category,key,value,updated_at")
       .eq("user_id", userId)
-      .or(`key.ilike.${like},value.ilike.${like}`)
+      .or(factOr)
       .limit(limit),
   ]);
   return { messages: (msgs.data ?? []).reverse(), facts: fcts.data ?? [] };
+}
+
+// --- episodic memory: per-day conversation digests (compressed, cacheable recall of past days) ---
+
+// all messages within a local-day window [startIso, endIso), oldest first — the raw material a
+// digest is built from.
+export async function messagesBetween(userId: string, startIso: string, endIso: string) {
+  const { data } = await db
+    .from("messages")
+    .select("direction,body,created_at")
+    .eq("user_id", userId)
+    .gte("created_at", startIso)
+    .lt("created_at", endIso)
+    .order("created_at", { ascending: true });
+  return data ?? [];
+}
+
+export async function upsertDigest(userId: string, day: string, digest: string, msgCount: number) {
+  const { data, error } = await db
+    .from("conversation_digests")
+    .upsert(
+      { user_id: userId, day, digest, msg_count: msgCount, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,day" }
+    )
+    .select("id,day")
+    .single();
+  if (error) throw new Error(`upsertDigest: ${error.message}`);
+  return data;
+}
+
+// most-recent daily recaps, oldest-first for readable chronological context.
+export async function listRecentDigests(userId: string, limit = 10) {
+  const { data } = await db
+    .from("conversation_digests")
+    .select("day,digest")
+    .eq("user_id", userId)
+    .order("day", { ascending: false })
+    .limit(limit);
+  return (data ?? []).reverse();
 }
 
 export async function logMessage(

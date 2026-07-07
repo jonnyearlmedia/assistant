@@ -12,7 +12,7 @@
 //   failure; the row itself is the durable retry state.
 import { db, User } from "./db";
 import * as mem from "./memory";
-import { composeProactive, think } from "./brain";
+import { composeProactive, think, summarizeDay } from "./brain";
 import { sendBubbles } from "./send";
 import * as q from "./queue";
 import * as maps from "./integrations/maps";
@@ -420,6 +420,78 @@ export async function runWeeklyPlanning(force = false): Promise<number> {
   return n;
 }
 
+// shift a YYYY-MM-DD local-day string by n days (UTC math on the date parts — no tz drift here).
+function addDays(day: string, n: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}`;
+}
+
+// build one day's episodic digest: read that local day's messages, summarize + extract durable facts,
+// store the recap, and save the facts. idempotent via last_digest marker + upsert.
+async function buildDigestFor(user: User, day: string, opts: { finalize?: boolean } = {}): Promise<void> {
+  const tz = user.timezone || "America/New_York";
+  const startIso = mem.normalizeDueAt(`${day}T00:00`, tz);
+  const endIso = mem.normalizeDueAt(`${addDays(day, 1)}T00:00`, tz);
+  const msgs = await mem.messagesBetween(user.id, startIso, endIso);
+  if (!msgs.length) return;
+  const label = new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const { digest, facts } = await summarizeDay(label, msgs);
+  if (digest) await mem.upsertDigest(user.id, day, digest, msgs.length);
+  for (const f of facts) {
+    try {
+      await mem.rememberFact(user.id, f.category || "general", f.key, f.value, "digest");
+    } catch {}
+  }
+  // last_digest marks a day as FINALIZED (its recap won't be re-queued). intra-day refreshes of the
+  // current day upsert the recap but leave it unfinalized so the nightly pass still closes it out.
+  if (opts.finalize !== false)
+    await db.from("users").update({ settings: { ...(user.settings as any), last_digest: day } }).eq("id", user.id);
+}
+
+// 6) daily digest — episodic memory. NIGHTLY (~3am local) finalizes YESTERDAY; plus cheap intra-day
+// REFRESHES of today-so-far (midday + evening) so a heavy day's morning is captured before it scrolls
+// out of the recent window. ~2¢/run, a couple runs/day. force recaps today-so-far (?force=digest).
+const DIGEST_REFRESH_HOURS = [13, 21];
+export async function runDailyDigest(force = false): Promise<number> {
+  let n = 0;
+  for (const user of await allUsers()) {
+    const tz = user.timezone || "America/New_York";
+    const { hour, date } = nowParts(tz);
+    const s: any = user.settings || {};
+    if (force) {
+      await buildDigestFor(user, date, { finalize: false });
+      n++;
+      continue;
+    }
+    // nightly: finalize yesterday (queued, exactly-once)
+    const digestHour = s.digest_hour ?? 3;
+    if (hour === digestHour) {
+      const yesterday = addDays(date, -1);
+      if (s.last_digest !== yesterday) {
+        const job = await q.enqueue(
+          "daily_digest",
+          { user_id: user.id, day: yesterday, finalize: true },
+          { dedupeKey: `digest-${user.id}-${yesterday}`, userId: user.id }
+        );
+        if (job) n++;
+      }
+    }
+    // intra-day: refresh today's recap at set hours (upsert, unfinalized). dedupe per user/day/hour.
+    if (DIGEST_REFRESH_HOURS.includes(hour) && s.last_digest_refresh !== `${date}:${hour}`) {
+      await db.from("users").update({ settings: { ...s, last_digest_refresh: `${date}:${hour}` } }).eq("id", user.id);
+      const job = await q.enqueue(
+        "daily_digest",
+        { user_id: user.id, day: date, finalize: false },
+        { dedupeKey: `digest-${user.id}-${date}-${hour}`, userId: user.id }
+      );
+      if (job) n++;
+    }
+  }
+  return n;
+}
+
 // job handlers — the execution side of the queue. every handler is idempotent-guarded
 // (re-checks the once-a-day marker + drops stale work) because retries WILL re-enter it.
 export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
@@ -428,7 +500,7 @@ export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
   send_message: async (job) => {
     const p = job.payload || {};
     const res = await sendBubbles(p.user_id, p.to, p.chat_id ?? undefined, p.text);
-    if (res.sent === 0) throw new Error("send_message: all bubbles failed");
+    if (res.sent === 0) throw new Error(`send_message: all bubbles failed${res.error ? ` — Linq said: ${res.error}` : ""}`);
   },
 
   morning_brief: async (job) => {
@@ -468,6 +540,15 @@ export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
     const { date } = nowParts(user.timezone || "America/New_York");
     if (p.date !== date) return; // stale — don't send a check-in for the wrong day
     await sendMoodCheckin(user, p.block);
+  },
+
+  daily_digest: async (job) => {
+    const p = job.payload || {};
+    const user = await getUser(p.user_id);
+    if (!user) return;
+    const finalize = p.finalize !== false;
+    if (finalize && (user.settings as any)?.last_digest === p.day) return; // already finalized
+    await buildDigestFor(user, p.day, { finalize });
   },
 
   automation: async (job) => {
@@ -510,6 +591,7 @@ export async function runTick() {
     ["mood", runMoodCheckins],
     ["planning", runWeeklyPlanning],
     ["automations", runAutomations],
+    ["digest", runDailyDigest],
   ] as const) {
     try {
       out[name] = await fn();

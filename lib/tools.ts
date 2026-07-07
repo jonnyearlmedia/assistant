@@ -67,7 +67,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "schedule_reminder",
     description:
-      "Schedule a reminder/nudge. For 'leave now' set location + lead_time_min so drive time can be added. due_at is ISO8601.",
+      "Schedule a reminder/nudge. For 'leave now' set location + lead_time_min so drive time can be added. due_at is ISO8601 in jonny's LOCAL time (his timezone) — e.g. '2026-07-08T05:15' for 5:15am his time. Local wall-clock is fine and preferred; don't hand-convert to UTC.",
     input_schema: {
       type: "object",
       properties: {
@@ -84,8 +84,14 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "list_reminders",
-    description: "List jonny's upcoming scheduled reminders.",
+    description: "List jonny's upcoming scheduled reminders (with their ids — needed to cancel one).",
     input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "cancel_reminder",
+    description:
+      "Cancel/delete a scheduled reminder so it stops firing. Get the id from list_reminders first. Use this to clean up a wrong or duplicate reminder.",
+    input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
     name: "create_automation",
@@ -182,6 +188,12 @@ export const TOOLS: Anthropic.Tool[] = [
     name: "notion_append",
     description: "Append text content to any Notion page by id (each line becomes a paragraph). Use for journaling/notes into an existing page.",
     input_schema: { type: "object", properties: { page_id: { type: "string" }, text: { type: "string" } }, required: ["page_id", "text"] },
+  },
+  {
+    name: "notion_delete_page",
+    description:
+      "Archive (soft-delete → Notion trash) a page/row by id. Use to clean up a duplicate or wrong entry — e.g. a stray mood-log row (get the id from notion_query_db / notion_search). Verified read-back confirms it's archived.",
+    input_schema: { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
   },
   {
     name: "notion_log",
@@ -421,10 +433,14 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
             area: input.area,
           })
         );
-      case "schedule_reminder":
-        return JSON.stringify(await mem.scheduleReminder(u, input));
+      case "schedule_reminder": {
+        const { data: usr } = await db.from("users").select("timezone").eq("id", u).maybeSingle();
+        return JSON.stringify(await mem.scheduleReminder(u, input, (usr as any)?.timezone));
+      }
       case "list_reminders":
         return JSON.stringify(await mem.listReminders(u));
+      case "cancel_reminder":
+        return JSON.stringify(await mem.cancelReminder(u, input.id));
       case "create_automation":
         return JSON.stringify(
           await mem.savePlaybook(u, input.name, input.instruction, {
@@ -484,6 +500,9 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
       case "notion_append":
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         return JSON.stringify(await notion.appendText(input.page_id, input.text));
+      case "notion_delete_page":
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        return JSON.stringify(await notion.archivePage(input.page_id));
       case "notion_log": {
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
         const f = input.fields || {};

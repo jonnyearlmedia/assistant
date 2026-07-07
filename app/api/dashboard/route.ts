@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ownerUserId } from "@/lib/integrations/tokens";
+import { normalizeDueAt } from "@/lib/memory";
 import { TOOLS } from "@/lib/tools";
 import * as ticktick from "@/lib/integrations/ticktick";
 import { organizeDump } from "@/lib/organize";
@@ -104,10 +105,16 @@ export async function POST(req: NextRequest) {
       // ---- reminders ----
       case "add_reminder": {
         if (!body.title || !body.due_at) return NextResponse.json({ error: "title+due_at required" }, { status: 400 });
+        // the datetime-local picker sends a naive wall-clock ("2026-07-08T05:15") in jonny's local
+        // time — normalize it against his timezone so it isn't read as UTC (the 5:15am→10:15pm bug).
+        const { data: u } = await db.from("users").select("timezone").eq("id", uid).maybeSingle();
+        let due: string;
+        try { due = normalizeDueAt(body.due_at, (u as any)?.timezone); }
+        catch { return NextResponse.json({ error: "bad time" }, { status: 400 }); }
         await db.from("reminders").insert({
           user_id: uid,
           title: body.title,
-          due_at: new Date(body.due_at).toISOString(),
+          due_at: due,
           location: body.location || null,
           recurrence: body.recurrence || null,
           lead_time_min: body.lead_time_min ? parseInt(body.lead_time_min) : 0,
@@ -120,9 +127,11 @@ export async function POST(req: NextRequest) {
         const patch: any = {};
         if (typeof body.title === "string" && body.title.trim()) patch.title = body.title.trim();
         if (body.due_at) {
-          const t = new Date(body.due_at);
-          if (isNaN(t.getTime())) return NextResponse.json({ error: "bad time" }, { status: 400 });
-          patch.due_at = t.toISOString();
+          // same normalization as add_reminder — interpret the picker's local time in jonny's tz,
+          // not the server's UTC. this is why editing the time "never updated" before.
+          const { data: u } = await db.from("users").select("timezone").eq("id", uid).maybeSingle();
+          try { patch.due_at = normalizeDueAt(body.due_at, (u as any)?.timezone); }
+          catch { return NextResponse.json({ error: "bad time" }, { status: 400 }); }
           patch.status = "scheduled"; // re-editing an overdue/cancelled one re-arms it
         }
         if (body.location !== undefined) patch.location = body.location || null;

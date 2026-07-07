@@ -13,6 +13,28 @@ import * as mem from "./memory";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.LEXA_MODEL || "claude-sonnet-5";
 const MAX_TOOL_TURNS = 8;
+// how many raw message ROWS to load for context. each bubble she sends is its own row, so a chatty
+// reply is 4-6 rows — we load a lot and then coalesce them into real turns below (see coalesce()).
+const HISTORY_ROWS = 150;
+
+// her multi-bubble replies (and his rapid-fire texts) are stored as separate rows. merge consecutive
+// same-direction rows into ONE turn so: (a) the model sees clean alternating turns, not fragmented
+// half-thoughts, and (b) "150 rows" becomes ~30-40 real exchanges instead of ~6. bubbles rejoin with
+// blank lines (how they were split to send in the first place).
+function coalesceTurns(rows: { direction: string; body: string }[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+  for (const m of rows) {
+    const role: "user" | "assistant" = m.direction === "inbound" ? "user" : "assistant";
+    const body = m.body || "";
+    const last = out[out.length - 1];
+    if (last && last.role === role && typeof last.content === "string") {
+      last.content = last.content ? `${last.content}\n\n${body}` : body;
+    } else {
+      out.push({ role, content: body });
+    }
+  }
+  return out;
+}
 
 // request-time copy of messages with a cache breakpoint on the very last content block,
 // so each call in the tool loop reuses everything before it (system + tools + prior turns).
@@ -58,13 +80,30 @@ export async function think(
   opts: { historyBefore?: string } = {}
 ): Promise<string> {
   // load memory into context
-  const [facts, goals, playbooks, subagents, history] = await Promise.all([
+  const [facts, goals, playbooks, subagents, history, digests] = await Promise.all([
     mem.listFacts(user.id),
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
     mem.listUserSubagents(user.id),
-    mem.recentMessages(user.id, 20, opts.historyBefore),
+    mem.recentMessages(user.id, HISTORY_ROWS, opts.historyBefore),
+    mem.listRecentDigests(user.id, 10),
   ]);
+
+  // AUTO-RECALL: surface older messages relevant to what he just said, from BEYOND the recent
+  // window, so she isn't blind to a conversation from earlier just because it scrolled off. this is
+  // the memory system — she no longer has to choose to `recall`; the relevant past is always fed in.
+  const oldestRecentIso = history.length ? history[0].created_at : opts.historyBefore;
+  const recalledMsgs = await mem
+    .retrieveRelevantMessages(user.id, incomingText, { beforeIso: oldestRecentIso, limit: 8 })
+    .catch(() => []);
+  const recalled = recalledMsgs.length
+    ? recalledMsgs
+        .map(
+          (m) =>
+            `- [${new Date(m.created_at).toLocaleString("en-US", { timeZone: user.timezone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}] ${m.direction === "inbound" ? "jonny" : "you"}: ${(m.body || "").slice(0, 240)}`
+        )
+        .join("\n")
+    : undefined;
 
   const system = buildSystemPrompt({
     name: user.name ?? undefined,
@@ -81,12 +120,15 @@ export async function think(
       .map((s: any) => `- ${s.name}: ${s.brief || "(no brief)"} [tools: ${(s.tools || []).join(", ")}]`)
       .join("\n"),
     areas: ((user.settings as any)?.areas || []).map((a: any) => `- ${a.name}`).join("\n") || undefined,
+    digests: digests.map((d: any) => `- ${d.day}: ${d.digest}`).join("\n") || undefined,
+    recalled,
   });
 
-  const messages: Anthropic.MessageParam[] = history.map((m) => ({
-    role: m.direction === "inbound" ? "user" : "assistant",
-    content: m.body || "",
-  }));
+  const messages: Anthropic.MessageParam[] = coalesceTurns(history);
+  // the API requires the FIRST message to be a user turn. the window can open on an assistant turn
+  // (a proactive outbound, or mid-reply) — if it does, the call 400s and she silently never replies.
+  // drop leading assistant turns so we always start on one of his messages.
+  while (messages.length && messages[0].role === "assistant") messages.shift();
 
   // current inbound — pull in attachments: images for vision, text/markdown files for ingestion
   let userContent: any = incomingText;
@@ -111,7 +153,14 @@ export async function think(
     if (blocks.length > 0) userContent = blocks;
     else if (!incomingText) userContent = "[sent an attachment i couldn't open — ask him what it was]";
   }
-  messages.push({ role: "user", content: userContent });
+  // fold the current text into a trailing user turn if history ended on one (his last text went
+  // unanswered), so we don't emit two user turns in a row. media stays its own turn.
+  const tail = messages[messages.length - 1];
+  if (tail && tail.role === "user" && typeof tail.content === "string" && typeof userContent === "string") {
+    tail.content = tail.content ? `${tail.content}\n\n${userContent}` : userContent;
+  } else {
+    messages.push({ role: "user", content: userContent });
+  }
 
   let reply = "";
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
@@ -159,6 +208,54 @@ export async function think(
   }
 
   return (reply || "gimme a sec, that one got tangled — try me again?").trim();
+}
+
+// MEMORY-FORMATION pass (episodic memory): read a day's conversation and produce (1) a short recap
+// and (2) any durable facts worth keeping. runs once/day per user (cheap — one call), so decisions
+// and context from a past day survive even after the raw messages scroll out of the recent window.
+export async function summarizeDay(
+  dayLabel: string,
+  messages: { direction: string; body: string }[]
+): Promise<{ digest: string; facts: { category: string; key: string; value: string }[] }> {
+  if (!messages.length) return { digest: "", facts: [] };
+  const transcript = messages
+    .map((m) => `${m.direction === "inbound" ? "jonny" : "lexa"}: ${(m.body || "").slice(0, 500)}`)
+    .join("\n")
+    .slice(0, 24000);
+  const prompt = `here is your text conversation with jonny on ${dayLabel}. produce EXACTLY this JSON, nothing else:
+{
+  "digest": "3-6 tight sentences: what you two actually discussed, decisions made, things he asked you to do, and anything left open/unresolved. concrete + specific (names, times, topics). this is your memory of the day.",
+  "facts": [ { "category": "routine|preference|person|health|work|general", "key": "short_stable_snake_key", "value": "the durable fact" } ]
+}
+facts = ONLY durable things worth remembering long-term (a preference, routine, person, standing decision, or commitment) — NOT small talk or one-off logistics. empty array if none.
+
+TRANSCRIPT:
+${transcript}`;
+  const res = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1200,
+    thinking: { type: "disabled" },
+    system: "you are lexa's memory-formation pass. extract durable facts + a concise daily recap. output STRICT JSON only, no prose, no code fences.",
+    messages: [{ role: "user", content: prompt }],
+  });
+  logUsage("digest", 0, res.usage);
+  const text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  const s = text.indexOf("{");
+  const e = text.lastIndexOf("}");
+  try {
+    const parsed = JSON.parse(s >= 0 && e > s ? text.slice(s, e + 1) : text);
+    const facts = (Array.isArray(parsed.facts) ? parsed.facts : [])
+      .filter((f: any) => f && f.key && f.value)
+      .slice(0, 12)
+      .map((f: any) => ({ category: String(f.category || "general"), key: String(f.key), value: String(f.value) }));
+    return { digest: String(parsed.digest || "").slice(0, 2000), facts };
+  } catch {
+    return { digest: text.slice(0, 2000), facts: [] }; // salvage a text recap even if JSON was malformed
+  }
 }
 
 // lexa reaching out FIRST (proactive): morning briefs, reminders, nudges, learning check-ins.

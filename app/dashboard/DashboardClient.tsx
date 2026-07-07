@@ -408,7 +408,7 @@ function ReminderRow({ r, onSave, onDelete, extra }: any) {
       <span>{r.title} <span className={overdue ? "od" : "dim"}>· {new Date(r.due_at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{overdue ? " (overdue)" : ""}</span>{r.recurrence ? <span className="dim"> ({r.recurrence})</span> : null}</span>
       <span className="actions">
         {extra}
-        <button className="btn ghost sm" onClick={() => setEditing(true)}>edit</button>
+        <button className="btn ghost sm" onClick={() => { setTitle(r.title); setDue(toLocalInput(r.due_at)); setEditing(true); }}>edit</button>
         <button className="btn danger sm" onClick={onDelete}>cancel</button>
       </span>
     </div>
