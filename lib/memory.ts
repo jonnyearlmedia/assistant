@@ -394,6 +394,45 @@ export async function searchMemory(userId: string, query: string, limit = 8) {
   return { messages: (msgs.data ?? []).reverse(), facts: fcts.data ?? [] };
 }
 
+// --- episodic memory: per-day conversation digests (compressed, cacheable recall of past days) ---
+
+// all messages within a local-day window [startIso, endIso), oldest first — the raw material a
+// digest is built from.
+export async function messagesBetween(userId: string, startIso: string, endIso: string) {
+  const { data } = await db
+    .from("messages")
+    .select("direction,body,created_at")
+    .eq("user_id", userId)
+    .gte("created_at", startIso)
+    .lt("created_at", endIso)
+    .order("created_at", { ascending: true });
+  return data ?? [];
+}
+
+export async function upsertDigest(userId: string, day: string, digest: string, msgCount: number) {
+  const { data, error } = await db
+    .from("conversation_digests")
+    .upsert(
+      { user_id: userId, day, digest, msg_count: msgCount, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,day" }
+    )
+    .select("id,day")
+    .single();
+  if (error) throw new Error(`upsertDigest: ${error.message}`);
+  return data;
+}
+
+// most-recent daily recaps, oldest-first for readable chronological context.
+export async function listRecentDigests(userId: string, limit = 10) {
+  const { data } = await db
+    .from("conversation_digests")
+    .select("day,digest")
+    .eq("user_id", userId)
+    .order("day", { ascending: false })
+    .limit(limit);
+  return (data ?? []).reverse();
+}
+
 export async function logMessage(
   userId: string | null,
   direction: "inbound" | "outbound",

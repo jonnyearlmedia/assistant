@@ -169,6 +169,7 @@ export function buildSystemPrompt(
     subagents?: string;
     areas?: string;
     onboardingStage?: string;
+    digests?: string;
     recalled?: string;
   },
   opts: { cache?: boolean } = {}
@@ -186,6 +187,7 @@ export function buildSystemPrompt(
     ctx.facts ? `\n## what you know about him\n${ctx.facts}` : "",
     ctx.goals ? `\n## his active goals\n${ctx.goals}` : "",
     ctx.playbooks ? `\n## your saved playbooks (run these exactly)\n${ctx.playbooks}` : "",
+    ctx.digests ? `\n## recent daily recaps (your compressed memory of past days — these are REAL; use them, don't claim you forgot)\n${ctx.digests}` : "",
     ctx.subagents ? `\n## your custom specialists (delegate to these by name)\n${ctx.subagents}` : "",
     ctx.areas
       ? `\n## his life areas (dashboard tabs)\n${ctx.areas}\nwhen you save a fact, goal, reminder, or playbook that clearly belongs to one of these, set the tool's \`area\` to that area's name so it files under the right tab. if it fits none, leave area off — don't force it. and if one area keeps filling with recurring work and he has no specialist for it, offer ONCE to build one (a helper he confirms) — never spin one up silently.`
