@@ -101,5 +101,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "episodic-digests-firstturn-fix-v27" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "send-error-capture-v28" });
 }

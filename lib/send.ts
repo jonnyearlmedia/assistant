@@ -9,7 +9,7 @@ import { enqueue } from "./queue";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const typingDelay = (t: string) => Math.min(1100 + t.length * 33, 4200);
 
-export type SendResult = { bubbles: number; sent: number; failed: number };
+export type SendResult = { bubbles: number; sent: number; failed: number; error?: string };
 
 export async function sendBubbles(
   userId: string,
@@ -32,6 +32,7 @@ export async function sendBubbles(
 
   let sent = 0;
   let failed = 0;
+  let lastError: string | undefined; // capture Linq's ACTUAL rejection (status + body) for diagnosis
   for (let i = 0; i < bubbles.length; i++) {
     await startTyping(chatId);
     await sleep(typingDelay(bubbles[i]));
@@ -39,7 +40,8 @@ export async function sendBubbles(
     if (s.ok) sent++;
     else {
       failed++;
-      console.error("[lexa] send failed:", s.error);
+      lastError = `${s.status ? `HTTP ${s.status} ` : ""}${s.error || "unknown"}`.slice(0, 300);
+      console.error("[lexa] send failed:", lastError);
     }
     await mem.logMessage(userId, "outbound", bubbles[i], {
       linq_message_id: s.messageId,
@@ -54,5 +56,5 @@ export async function sendBubbles(
       console.error("[lexa] failed to enqueue send retry:", e?.message || e);
     }
   }
-  return { bubbles: bubbles.length, sent, failed };
+  return { bubbles: bubbles.length, sent, failed, error: lastError };
 }

@@ -500,7 +500,7 @@ export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
   send_message: async (job) => {
     const p = job.payload || {};
     const res = await sendBubbles(p.user_id, p.to, p.chat_id ?? undefined, p.text);
-    if (res.sent === 0) throw new Error("send_message: all bubbles failed");
+    if (res.sent === 0) throw new Error(`send_message: all bubbles failed${res.error ? ` — Linq said: ${res.error}` : ""}`);
   },
 
   morning_brief: async (job) => {
