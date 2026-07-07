@@ -80,6 +80,7 @@ export async function think(
     subagents: subagents
       .map((s: any) => `- ${s.name}: ${s.brief || "(no brief)"} [tools: ${(s.tools || []).join(", ")}]`)
       .join("\n"),
+    areas: ((user.settings as any)?.areas || []).map((a: any) => `- ${a.name}`).join("\n") || undefined,
   });
 
   const messages: Anthropic.MessageParam[] = history.map((m) => ({
@@ -184,6 +185,7 @@ export async function composeProactive(
       facts: facts.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n"),
       goals: goals.map((g) => `- ${g.title}${g.detail ? ` (${g.detail})` : ""}`).join("\n"),
       playbooks: playbooks.map((p) => `- ${p.name}: ${p.instructions}`).join("\n"),
+      areas: ((user.settings as any)?.areas || []).map((a: any) => `- ${a.name}`).join("\n") || undefined,
     },
     { cache: false }
   );
