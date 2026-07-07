@@ -48,6 +48,7 @@ const NAV: [string, string][] = [
   ["goals", "🎯 goals"],
   ["helpers", "🤖 helpers"],
   ["howtos", "📋 how-tos"],
+  ["mood", "🧠 mood"],
   ["reminders", "⏰ reminders"],
   ["todos", "✅ to-dos"],
   ["settings", "⚙️ settings"],
@@ -184,6 +185,11 @@ export default function DashboardClient({ initial }: { initial: any }) {
           ))}
           {d.playbooks.length === 0 ? <Empty text="None yet. Teach her a routine (or just use the box at the top)." /> : null}
           <NewPlaybook onSave={(body: any) => api("save_playbook", body, "✓ created")} />
+        </Card>
+
+        {/* MOOD */}
+        <Card id="mood" icon="🧠" title="Mood check-ins" open={(d.moods || []).length === 0} help="She texts you once per 4-hour block (at a random time inside it), reads a 1–10 + a word + a quick why, and logs it to your health_mood tracker — the heatmap you show in therapy.">
+          <MoodSection d={d} onSave={(body: any) => api("set_mood", body, "✓ mood check-ins saved")} />
         </Card>
 
         {/* REMINDERS */}
@@ -435,6 +441,81 @@ function SettingsForm({ d, onSave }: any) {
   );
 }
 
+// the six 4-hour blocks (match health_mood's Time Block options). she picks a random time inside
+// each window so the entry represents the whole block.
+const MOOD_WINDOWS_UI: [string, string][] = [
+  ["Pre-Dawn", "2–6am"],
+  ["Morning", "6–10am"],
+  ["Midday", "10am–2pm"],
+  ["Afternoon", "2–6pm"],
+  ["Evening", "6–10pm"],
+  ["Late Night", "10pm–2am"],
+];
+const heatColor = (r: number | null): string => {
+  if (r == null) return "#2a2f3a";
+  const t = Math.max(1, Math.min(10, r));
+  // 1 (red) → 5 (amber) → 10 (green)
+  const hue = ((t - 1) / 9) * 120; // 0=red..120=green
+  return `hsl(${hue} 55% 42%)`;
+};
+function whenLabel(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function MoodSection({ d, onSave }: any) {
+  const mood = (d.settings || {}).mood || {};
+  const [enabled, setEnabled] = useState<boolean>(!!mood.enabled);
+  // a block is on unless it's explicitly disabled in saved settings
+  const savedOff = new Set<string>((Array.isArray(mood.blocks) ? mood.blocks : []).filter((b: any) => b && b.enabled === false).map((b: any) => String(b.name)));
+  const [off, setOff] = useState<Set<string>>(savedOff);
+  const toggle = (name: string) => setOff((s) => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
+  const moods = d.moods || [];
+  return (
+    <div>
+      <label className="toggle">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        <span>Text me a mood check-in every block</span>
+      </label>
+      <div className="minihelp">She sends once per block, at a random time inside the window — so the entry covers the whole block. Turn off any block you don't want.</div>
+      <div className={`blocklist ${enabled ? "" : "off"}`}>
+        {MOOD_WINDOWS_UI.map(([name, label]) => (
+          <label key={name} className="blockrow">
+            <span className="bchk">
+              <input type="checkbox" checked={!off.has(name)} onChange={() => toggle(name)} />
+              <span className="bname">{name}</span>
+            </span>
+            <span className="dim">{label}</span>
+          </label>
+        ))}
+      </div>
+      <button className="btn ok wide mt6" onClick={() => onSave({ enabled, blocks: MOOD_WINDOWS_UI.map(([name]) => ({ name, enabled: !off.has(name) })) })}>Save mood check-ins</button>
+
+      <div className="moodlog">
+        <div className="mloglbl">recent logs {moods.length ? "(from health_mood)" : ""}</div>
+        {moods.length === 0 ? (
+          <div className="empty">No mood entries loaded yet — once she logs one it shows here. (If it stays empty, the health_mood database may need to be shared with her Notion integration via ••• → Connections.)</div>
+        ) : (
+          moods.map((m: any) => (
+            <div key={m.id} className="moodentry">
+              <span className="mheat" style={{ background: heatColor(m.rating) }}>{m.rating != null ? m.rating : "–"}</span>
+              <div className="mbody">
+                <div className="mtop">
+                  <span className="mblock">{m.block || "—"}</span>
+                  {m.category ? <span className="mcat">{m.category}</span> : null}
+                  <span className="mwhen">{whenLabel(m.when)}</span>
+                </div>
+                {m.notes ? <div className="mnotes">{m.notes}</div> : null}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 const CSS = `
 :root{--bg:#0e1014;--card:#191c23;--bd:#2a2f3a;--in:#0c0e12;--txt:#f2f3f6;--dim:#98a0af;--dim2:#c6ccd6;--dim3:#7c8494;--green:#68d693;--red:#ee7c9b;--blue:#8fb4ff;--amber:#e8b96e;--accent:#8fb4ff}
 *{box-sizing:border-box}
@@ -496,6 +577,26 @@ details[open] .chev{transform:rotate(180deg)}
 .abtile.on{background:#173021;border-color:#2b533c;color:var(--green)}
 .abicon{font-size:17px}
 .abcheck{position:absolute;right:10px;font-weight:800}
+.toggle{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--txt);cursor:pointer;padding:4px 0}
+.toggle input{width:20px;height:20px;accent-color:var(--green)}
+.minihelp{font-size:13px;color:var(--dim);line-height:1.5;margin:8px 0 2px}
+.blocklist{margin-top:12px;border:1px solid var(--bd);border-radius:12px;overflow:hidden;transition:opacity .2s}
+.blocklist.off{opacity:.45}
+.blockrow{display:flex;justify-content:space-between;align-items:center;padding:12px 13px;border-bottom:1px solid #22262f;cursor:pointer}
+.blockrow:last-child{border-bottom:none}
+.bchk{display:flex;align-items:center;gap:9px}
+.bchk input{width:18px;height:18px;accent-color:var(--green)}
+.bname{font-size:15px;font-weight:600}
+.moodlog{margin-top:20px}
+.mloglbl{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim3);font-weight:700;margin-bottom:10px}
+.moodentry{display:flex;gap:11px;align-items:flex-start;border:1px solid #22262f;border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.mheat{flex:0 0 auto;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#0c1220}
+.mbody{flex:1;min-width:0}
+.mtop{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.mblock{font-weight:700;color:var(--accent);font-size:14px}
+.mcat{font-size:14px;color:var(--txt);font-weight:600}
+.mwhen{font-size:12px;color:var(--dim3);margin-left:auto}
+.mnotes{font-size:13.5px;color:var(--dim2);margin-top:5px;line-height:1.5}
 .corebox{background:#12161d;border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin-bottom:14px}
 .corelbl{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim3);font-weight:700;margin-bottom:8px}
 .corerule{font-size:13.5px;color:var(--dim2);line-height:1.6;padding:1px 0}

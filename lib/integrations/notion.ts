@@ -6,6 +6,11 @@ const NOTION = "https://api.notion.com/v1";
 const VER = "2022-06-28";
 const MASTER_PLANNER_DB =
   process.env.NOTION_MASTER_PLANNER_DB || "2b89eadd-b0c6-4fba-bd09-ca10359249fe";
+// live health_mood db (studied from jonny's workspace — real schema below). REST database_id form.
+const HEALTH_MOOD_DB =
+  process.env.NOTION_HEALTH_MOOD_DB || "35928855-552c-81af-b504-cb4325039465";
+// the Time Block select options, in day order. lexa picks the one matching the current time.
+export const MOOD_BLOCKS = ["Pre-Dawn", "Morning", "Midday", "Afternoon", "Evening", "Late Night"];
 
 function headers() {
   return {
@@ -81,6 +86,97 @@ export async function createMasterPlannerTask(
     : "created but read-back could not confirm — flag this, don't claim done";
   auditWrite("notion", "create_master_planner_task", { targetRef: id, requested: compactReq({ task: f.task, due: f.due, project: f.project, status: f.status }), verified, detail });
   return { ok: true, id, verified, detail };
+}
+
+// ---- health_mood: mood logging for therapy reports (STRICT schema, verified read-back) ----
+// live schema (studied): Name(title) Rating(number) "Time Block"(select) Date(date)
+// "Exact Timestamp"(date+time) "Broad Category"(select) "Specific Feeling"(multi_select)
+// Trigger(multi_select) Notes(text) is_therapy_day(checkbox)
+export interface MoodEntry {
+  block: string; // one of MOOD_BLOCKS
+  rating?: number; // 1–10
+  category?: string; // Broad Category — overall vibe
+  feelings?: string[]; // Specific Feeling
+  triggers?: string[]; // Trigger — what drove it
+  notes?: string;
+  therapy_day?: boolean;
+  when?: string; // ISO; defaults to now
+  tz?: string; // for the date-only + human name
+}
+
+export async function logMood(m: MoodEntry): Promise<{ ok: boolean; id?: string; verified: boolean; detail: string }> {
+  if (!process.env.NOTION_TOKEN) return { ok: false, verified: false, detail: "NOTION_TOKEN not set" };
+  const tz = m.tz || "America/New_York";
+  const block = MOOD_BLOCKS.find((b) => b.toLowerCase() === String(m.block || "").toLowerCase()) || m.block || "Morning";
+  const when = m.when ? new Date(m.when) : new Date();
+  const g: any = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(when)
+      .map((p) => [p.type, p.value])
+  );
+  const dateOnly = `${g.year}-${g.month}-${g.day}`;
+  const dateLabel = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric" }).format(when);
+  const name = `Mood - ${block} - ${dateLabel}`;
+
+  const props: any = {
+    Name: { title: [{ text: { content: name } }] },
+    "Time Block": { select: { name: block } },
+    Date: { date: { start: dateOnly } },
+    "Exact Timestamp": { date: { start: when.toISOString() } },
+  };
+  if (typeof m.rating === "number" && !isNaN(m.rating)) props["Rating"] = { number: m.rating };
+  if (m.category) props["Broad Category"] = { select: { name: String(m.category).slice(0, 100) } };
+  if (m.feelings?.length) props["Specific Feeling"] = { multi_select: m.feelings.slice(0, 8).map((f) => ({ name: String(f).slice(0, 100) })) };
+  if (m.triggers?.length) props["Trigger"] = { multi_select: m.triggers.slice(0, 8).map((t) => ({ name: String(t).slice(0, 100) })) };
+  if (m.notes) props["Notes"] = { rich_text: [{ text: { content: String(m.notes).slice(0, 1900) } }] };
+  if (typeof m.therapy_day === "boolean") props["is_therapy_day"] = { checkbox: m.therapy_day };
+
+  const res = await fetch(`${NOTION}/pages`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ parent: { database_id: HEALTH_MOOD_DB }, properties: props }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const detail = `mood log failed: ${data?.message || res.status}${res.status === 404 ? " — the health_mood db may not be shared with lexa's Notion integration (••• → Connections)" : ""}`;
+    auditWrite("notion", "log_mood", { requested: compactReq({ block, rating: m.rating, category: m.category }), verified: false, detail });
+    return { ok: false, verified: false, detail };
+  }
+  const id = data.id;
+  const check = await fetch(`${NOTION}/pages/${id}`, { headers: headers() });
+  const cd = await check.json();
+  const gotBlock = cd?.properties?.["Time Block"]?.select?.name;
+  const verified = check.ok && cd?.id === id && gotBlock === block;
+  const detail = verified
+    ? `logged & verified in health_mood: ${block}${typeof m.rating === "number" ? ` ${m.rating}/10` : ""}${m.category ? ` (${m.category})` : ""}`
+    : "wrote the row but read-back couldn't confirm — flag it, don't claim done";
+  auditWrite("notion", "log_mood", { targetRef: id, requested: compactReq({ block, rating: m.rating, category: m.category }), verified, detail });
+  return { ok: true, id, verified, detail };
+}
+
+export async function listMoodEntries(limit = 8): Promise<{ ok: boolean; entries?: any[]; detail: string }> {
+  if (!process.env.NOTION_TOKEN) return { ok: false, detail: "NOTION_TOKEN not set" };
+  const res = await fetch(`${NOTION}/databases/${HEALTH_MOOD_DB}/query`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ page_size: limit, sorts: [{ property: "Exact Timestamp", direction: "descending" }] }),
+  });
+  const d = await res.json();
+  if (!res.ok) return { ok: false, detail: d?.message || `status ${res.status}` };
+  const entries = (d.results || []).map((p: any) => {
+    const pr = p.properties || {};
+    return {
+      id: p.id,
+      block: pr["Time Block"]?.select?.name || null,
+      rating: pr.Rating?.number ?? null,
+      category: pr["Broad Category"]?.select?.name || null,
+      feelings: (pr["Specific Feeling"]?.multi_select || []).map((s: any) => s.name),
+      triggers: (pr.Trigger?.multi_select || []).map((s: any) => s.name),
+      notes: pr.Notes?.rich_text?.map((t: any) => t.plain_text).join("") || "",
+      when: pr["Exact Timestamp"]?.date?.start || pr.Date?.date?.start || null,
+    };
+  });
+  return { ok: true, entries, detail: `${entries.length} entries` };
 }
 
 function titleOf(r: any): string {

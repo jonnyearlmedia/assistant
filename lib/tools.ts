@@ -191,6 +191,24 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "log_mood",
+    description:
+      "Log a mood entry to jonny's health_mood Notion tracker (feeds his therapy mood-tracker heatmap — VERIFIED read-back). Use whenever he tells you how he's feeling, when he replies to a mood check-in, OR when you can reasonably infer his mood from what he's doing/discussing (then tell him what you logged so he can fix it). The tracker really only needs THREE things per entry, so keep it tight: (1) rating — a 1–10 number, drives the heatmap color; (2) category — ONE mood word (e.g. Focused, Tired, content, anxious, Locked In); (3) notes — the 'why' in NO MORE than 3–4 words (e.g. 'little sleep + workout'). block is REQUIRED (Pre-Dawn|Morning|Midday|Afternoon|Evening|Late Night — the one matching the time). feelings/triggers are optional extras — usually leave them empty, one category word is enough. New values are fine (Notion creates the option). Report verified:false honestly, never fake a log.",
+    input_schema: {
+      type: "object",
+      properties: {
+        block: { type: "string", description: "Pre-Dawn | Morning | Midday | Afternoon | Evening | Late Night" },
+        rating: { type: "number", description: "1–10" },
+        category: { type: "string" },
+        feelings: { type: "array", items: { type: "string" } },
+        triggers: { type: "array", items: { type: "string" } },
+        notes: { type: "string" },
+        therapy_day: { type: "boolean" },
+      },
+      required: ["block"],
+    },
+  },
+  {
     name: "list_master_planner",
     description:
       "Read jonny's current tasks from the Notion MASTER PLANNER database (task, status, due, priority, project). Use for 'what's on my planner', planning, or before adding to avoid dupes.",
@@ -483,9 +501,37 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
           );
         }
         if (input.target === "health_mood") {
-          return "for health_mood: notion_search it → notion_query_db to see its exact property names/options → then notion_create_page with those fields (follow jonny's saved format playbook if one exists). don't guess property names.";
+          const { data: usr } = await db.from("users").select("timezone").eq("id", u).maybeSingle();
+          return JSON.stringify(
+            await notion.logMood({
+              block: f.block || f.time_block || f["Time Block"],
+              rating: f.rating,
+              category: f.category || f.broad_category,
+              feelings: f.feelings || f.specific_feeling,
+              triggers: f.triggers || f.trigger,
+              notes: f.notes,
+              therapy_day: f.therapy_day ?? f.is_therapy_day,
+              tz: (usr as any)?.timezone,
+            })
+          );
         }
         return `notion target '${input.target}' not wired yet.`;
+      }
+      case "log_mood": {
+        if (!notion.notionConnected()) return NOT_CONNECTED("Notion");
+        const { data: usr } = await db.from("users").select("timezone").eq("id", u).maybeSingle();
+        return JSON.stringify(
+          await notion.logMood({
+            block: input.block,
+            rating: input.rating,
+            category: input.category,
+            feelings: input.feelings,
+            triggers: input.triggers,
+            notes: input.notes,
+            therapy_day: input.therapy_day,
+            tz: (usr as any)?.timezone,
+          })
+        );
       }
       case "list_master_planner":
         if (!notion.notionConnected()) return NOT_CONNECTED("Notion");

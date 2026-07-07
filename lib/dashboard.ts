@@ -4,6 +4,7 @@ import { db } from "./db";
 import { ownerUserId } from "./integrations/tokens";
 import { computeSpend, periodSince } from "./spend";
 import * as ticktick from "./integrations/ticktick";
+import * as notion from "./integrations/notion";
 
 export type DashData = Awaited<ReturnType<typeof loadDashboard>>;
 
@@ -29,6 +30,11 @@ export async function loadDashboard() {
   try {
     todos = await ticktick.listTasks("today");
   } catch {}
+  let moods: any[] = [];
+  try {
+    const mr = await notion.listMoodEntries(8);
+    if (mr.ok) moods = mr.entries || [];
+  } catch {}
   const u: any = user.data || {};
   return {
     facts: facts.data || [],
@@ -46,5 +52,6 @@ export async function loadDashboard() {
     spendWeek: spendWeek ? spendWeek.total_usd : null,
     deadJobs: (jobs.data || []).filter((j: any) => j.status === "dead").length,
     todos: todos?.ok ? { overdue: todos.overdue || [], dated: todos.dated || [] } : null,
+    moods,
   };
 }
