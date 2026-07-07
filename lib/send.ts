@@ -5,6 +5,7 @@
 import { sendMessage, startTyping } from "./linq";
 import * as mem from "./memory";
 import { enqueue } from "./queue";
+import { db } from "./db";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const typingDelay = (t: string) => Math.min(1100 + t.length * 33, 4200);
@@ -47,6 +48,18 @@ export async function sendBubbles(
       linq_message_id: s.messageId,
       status: s.ok ? "sent" : "failed",
     });
+  }
+
+  // stash the real Linq rejection somewhere readable (Supabase) — Vercel logs aren't reachable from
+  // every tool, so this lets us diagnose an outbound outage straight from the DB.
+  if (sent === 0 && failed > 0 && lastError) {
+    try {
+      const { data: u } = await db.from("users").select("settings").eq("id", userId).maybeSingle();
+      await db
+        .from("users")
+        .update({ settings: { ...(((u as any)?.settings) || {}), last_send_error: { at: new Date().toISOString(), error: lastError } } })
+        .eq("id", userId);
+    } catch {}
   }
 
   if (opts.durable && sent === 0 && failed > 0) {
