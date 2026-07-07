@@ -192,6 +192,22 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      // ---- mood check-ins (block schedule + on/off) ----
+      case "set_mood": {
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const cur = ((user?.settings as any) || {}).mood || {};
+        const mood: any = { ...cur };
+        if (body.enabled !== undefined) mood.enabled = body.enabled === true || body.enabled === "on";
+        if (Array.isArray(body.blocks)) {
+          mood.blocks = body.blocks
+            .map((b: any) => ({ name: String(b.name || "").slice(0, 24), enabled: b.enabled !== false }))
+            .filter((b: any) => b.name);
+        }
+        const settings = { ...((user?.settings as any) || {}), mood };
+        await db.from("users").update({ settings }).eq("id", uid);
+        return NextResponse.json({ ok: true });
+      }
+
       // ---- settings ----
       case "set_settings": {
         const { data: user } = await db.from("users").select("settings").eq("id", uid).single();

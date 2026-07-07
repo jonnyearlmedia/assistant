@@ -314,6 +314,87 @@ export async function runAutomations(): Promise<number> {
   return n;
 }
 
+// mood time-blocks = the health_mood db's six 4-hour windows. she sends ONE check-in per block
+// per day, at a RANDOM time inside the window (so the entry represents the whole block). "len" is
+// the send-timing span in hours; Late Night is capped pre-midnight so a target never crosses days.
+const MOOD_WINDOWS = [
+  { name: "Pre-Dawn", start: 2, len: 4 }, // 2–6am
+  { name: "Morning", start: 6, len: 4 }, // 6–10am
+  { name: "Midday", start: 10, len: 4 }, // 10am–2pm
+  { name: "Afternoon", start: 14, len: 4 }, // 2–6pm
+  { name: "Evening", start: 18, len: 4 }, // 6–10pm
+  { name: "Late Night", start: 22, len: 2 }, // 10pm–midnight (block still logs as "Late Night")
+];
+
+// stable pseudo-random target minute-of-day within a block, seeded by (user,date,block) so it's
+// the same across every 15-min tick that day but varies day-to-day. kept to the middle 80% of the
+// window so it isn't glued to the edges.
+function moodTargetMinute(seed: string, startHour: number, len: number): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const frac = ((h >>> 0) % 10000) / 10000; // [0,1)
+  const within = (0.1 + frac * 0.8) * len * 60;
+  return startHour * 60 + Math.floor(within);
+}
+
+// she runs this through the full brain (not just a composed line) so she can INFER his mood from
+// recent context and log it proactively, Tomo-style — or just ask if she genuinely can't tell.
+async function sendMoodCheckin(user: User, block: string): Promise<void> {
+  const b = block.toLowerCase();
+  const directive =
+    `(internal: ${block} mood check-in) capture jonny's mood for the ${block} block — this feeds his therapy mood tracker, which wants exactly: a 1–10 rating (drives a heatmap), ONE mood word, and a "why" of no more than 3–4 words.\n` +
+    `- if your recent conversation or what he's been up to gives you a fair read on how he's feeling, LOG IT NOW with log_mood (block="${block}"): pick the rating + one word (category) + a tiny why (notes ≤4 words). then text him ONE short line telling him what you logged so he can correct it. assume, log, let him fix — that's the move.\n` +
+    `- if you honestly can't tell, DON'T log — just text ONE light line asking how the ${b}'s going (a 1–10, a word, and a couple words why).\n` +
+    `keep it to one human line. don't send a form.`;
+  const text = await think(user, directive);
+  const res = await sendBubbles(user.id, user.phone, (user as any).linq_chat_id, text);
+  if (res.sent === 0) throw new Error("mood checkin: all bubbles failed to send");
+}
+
+// 4b) mood check-ins — one per 4-hour block per day, fired at a random time inside the window.
+// gated on settings.mood.enabled; a block can be turned off via settings.mood.blocks[].enabled.
+export async function runMoodCheckins(force = false): Promise<number> {
+  let n = 0;
+  for (const user of await allUsers()) {
+    const s: any = user.settings || {};
+    const mood = s.mood || {};
+    const tz = user.timezone || "America/New_York";
+    const { hour, minute, date } = nowParts(tz);
+    const nowMin = hour * 60 + minute;
+    const disabled = new Set(
+      (Array.isArray(mood.blocks) ? mood.blocks : []).filter((x: any) => x && x.enabled === false).map((x: any) => x.name)
+    );
+    if (force) {
+      // fire the block whose window currently contains now (else the most recent one)
+      const cur =
+        MOOD_WINDOWS.find((w) => nowMin >= w.start * 60 && nowMin < (w.start + w.len) * 60) ||
+        [...MOOD_WINDOWS].reverse().find((w) => nowMin >= w.start * 60) ||
+        MOOD_WINDOWS[1];
+      await sendMoodCheckin(user, cur.name);
+      n++;
+      continue;
+    }
+    if (!mood.enabled) continue;
+    for (const w of MOOD_WINDOWS) {
+      if (disabled.has(w.name)) continue;
+      const winStart = w.start * 60;
+      const winEnd = (w.start + w.len) * 60;
+      if (nowMin < winStart || nowMin >= winEnd) continue; // not in this block's window right now
+      if (nowMin < moodTargetMinute(`${user.id}|${date}|${w.name}`, w.start, w.len)) continue; // random time not reached
+      const job = await q.enqueue(
+        "mood_checkin",
+        { user_id: user.id, date, block: w.name },
+        { dedupeKey: `mood-${user.id}-${date}-${w.name}`, userId: user.id }
+      );
+      if (job) n++;
+    }
+  }
+  return n;
+}
+
 // 5) weekly planning — sunday evening, offer to time-block the backlog + review the week ahead
 export async function runWeeklyPlanning(force = false): Promise<number> {
   let n = 0;
@@ -380,6 +461,15 @@ export const JOB_HANDLERS: Record<string, (job: q.Job) => Promise<void>> = {
     await sendWeeklyPlanningTo(user, date);
   },
 
+  mood_checkin: async (job) => {
+    const p = job.payload || {};
+    const user = await getUser(p.user_id);
+    if (!user) return;
+    const { date } = nowParts(user.timezone || "America/New_York");
+    if (p.date !== date) return; // stale — don't send a check-in for the wrong day
+    await sendMoodCheckin(user, p.block);
+  },
+
   automation: async (job) => {
     const p = job.payload || {};
     const user = await getUser(p.user_id);
@@ -417,6 +507,7 @@ export async function runTick() {
     ["commitments", dispatchDueCommitments],
     ["brief", runDailyBrief],
     ["checkin", proactiveCheckin],
+    ["mood", runMoodCheckins],
     ["planning", runWeeklyPlanning],
     ["automations", runAutomations],
   ] as const) {
