@@ -624,11 +624,9 @@ main{font-family:-apple-system,system-ui,"Segoe UI",sans-serif;background:var(--
 .tbrow{display:flex;justify-content:space-between;align-items:center;padding-bottom:8px}
 .brand{font-size:22px;font-weight:800;letter-spacing:-.5px}
 .tbstat{font-size:12px;color:var(--dim)}
-.nav{display:flex;gap:7px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
-.nav::-webkit-scrollbar{display:none}
+.nav{display:flex;gap:7px;flex-wrap:wrap;padding-bottom:10px}
 .navpill{flex:0 0 auto;font-size:13px;color:var(--dim2);background:#20242e;border:1px solid var(--bd);border-radius:20px;padding:6px 12px;text-decoration:none;white-space:nowrap}
-.areabar{display:flex;gap:7px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
-.areabar::-webkit-scrollbar{display:none}
+.areabar{display:flex;gap:7px;flex-wrap:wrap;padding-bottom:10px}
 .areapill{flex:0 0 auto;font-size:13.5px;font-weight:600;color:var(--dim2);background:#161a22;border:1px solid var(--bd);border-radius:10px;padding:7px 13px;cursor:pointer;white-space:nowrap;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
 .areapill.on{background:var(--accent);color:#0c1424;border-color:var(--accent)}
 .areapill.add{color:var(--accent);border-style:dashed}
