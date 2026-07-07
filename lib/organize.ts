@@ -13,7 +13,9 @@ per distinct thing, each with the RIGHT type:
 - fact: a stable truth about jonny (a preference/routine/person/work/health detail). fields: category (one short word), key (short), value.
 - goal: something he's working toward over time. fields: title, detail (optional).
 - playbook: a repeatable workflow or strict format he wants done the same way every time. fields: name, trigger (optional), instructions.
-- reminder: a nudge at a specific time. fields: title, due_at (ISO8601 — ONLY if a concrete date/time is clear), location (optional).
+- reminder: a nudge at a specific time. fields: title, due_at (full ISO8601 in HIS timezone — use the EXACT
+  time he stated; if he gives a time with no date, use the NEXT future occurrence; NEVER a past date), location (optional).
+  do NOT split one event into multiple reminders unless he clearly asked for several separate nudges.
 - place: a named address. fields: name, address.
 - commitment: something he said he'll actually do soon. fields: what, follow_up_at (ISO8601, best guess).
 only emit items clearly present. do NOT invent. prefer fewer, accurate items. when unsure between instruction and fact:
@@ -50,13 +52,22 @@ export async function organizeDump(userId: string, text: string): Promise<{ ok: 
   const body = (text || "").trim();
   if (!body) return { ok: false, summary: "nothing to organize" };
 
+  // give the model the real clock so dates/times come out right (was hallucinating past years).
+  let tz = "America/New_York";
+  try {
+    const { data } = await db.from("users").select("timezone").eq("id", userId).maybeSingle();
+    if (data?.timezone) tz = data.timezone;
+  } catch {}
+  const nowStr = new Date().toLocaleString("en-US", { timeZone: tz, weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const system = `${SYSTEM}\n\nRIGHT NOW it is ${nowStr} in jonny's timezone (${tz}). compute every due_at and follow_up_at relative to THIS moment, as full ISO8601 in that timezone. never output a date in the past.`;
+
   let items: any[] = [];
   try {
     const res = await client.messages.create({
       model: MODEL,
       max_tokens: 1500,
       thinking: { type: "disabled" },
-      system: SYSTEM,
+      system,
       tools: [TOOL],
       tool_choice: { type: "tool", name: "file_items" } as any,
       messages: [{ role: "user", content: body }],
