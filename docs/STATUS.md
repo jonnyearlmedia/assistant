@@ -13,6 +13,13 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - File ingestion: reads `.md/.txt/.csv/json` attachments
 
 **Brain / memory**
+- **Auto-recall (retrieval-augmented context)** — every `think()` loads the last 40 messages AND
+  automatically keyword-searches his FULL history for older messages relevant to what he just said,
+  injecting them as a volatile system block (after the cache breakpoint, so caching is intact). She
+  no longer has to *choose* to `recall` — the relevant past is fed in every turn. Ranked by
+  keyword-match count then recency (`retrieveRelevantMessages` in `lib/memory.ts`). This fixed the
+  "we talked last night / not even a trace of it" amnesia: the convo was always in `messages`, she
+  was just blind to anything past the recent window.
 - Editable memory: facts (add/edit/forget), goals, playbooks (learn workflows by text)
 - Task-routing guidance (TickTick vs Notion MASTER PLANNER vs short-term)
 - Verified-writes, backbone, "say limits once" — all in `lib/persona.ts`

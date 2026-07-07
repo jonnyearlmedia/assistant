@@ -63,8 +63,24 @@ export async function think(
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
     mem.listUserSubagents(user.id),
-    mem.recentMessages(user.id, 20, opts.historyBefore),
+    mem.recentMessages(user.id, 40, opts.historyBefore),
   ]);
+
+  // AUTO-RECALL: surface older messages relevant to what he just said, from BEYOND the recent
+  // window, so she isn't blind to a conversation from earlier just because it scrolled off. this is
+  // the memory system — she no longer has to choose to `recall`; the relevant past is always fed in.
+  const oldestRecentIso = history.length ? history[0].created_at : opts.historyBefore;
+  const recalledMsgs = await mem
+    .retrieveRelevantMessages(user.id, incomingText, { beforeIso: oldestRecentIso, limit: 8 })
+    .catch(() => []);
+  const recalled = recalledMsgs.length
+    ? recalledMsgs
+        .map(
+          (m) =>
+            `- [${new Date(m.created_at).toLocaleString("en-US", { timeZone: user.timezone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}] ${m.direction === "inbound" ? "jonny" : "you"}: ${(m.body || "").slice(0, 240)}`
+        )
+        .join("\n")
+    : undefined;
 
   const system = buildSystemPrompt({
     name: user.name ?? undefined,
@@ -81,6 +97,7 @@ export async function think(
       .map((s: any) => `- ${s.name}: ${s.brief || "(no brief)"} [tools: ${(s.tools || []).join(", ")}]`)
       .join("\n"),
     areas: ((user.settings as any)?.areas || []).map((a: any) => `- ${a.name}`).join("\n") || undefined,
+    recalled,
   });
 
   const messages: Anthropic.MessageParam[] = history.map((m) => ({

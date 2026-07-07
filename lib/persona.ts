@@ -164,6 +164,7 @@ export function buildSystemPrompt(
     subagents?: string;
     areas?: string;
     onboardingStage?: string;
+    recalled?: string;
   },
   opts: { cache?: boolean } = {}
 ): SystemBlock[] {
@@ -192,6 +193,16 @@ export function buildSystemPrompt(
     type: "text",
     text: `\n## right now\n- his name: ${ctx.name ?? "jonny"}\n- timezone: ${ctx.timezone ?? "America/New_York"}\n- current time: ${ctx.now ?? "unknown"}\n- onboarding stage: ${ctx.onboardingStage ?? "discovery"}`,
   });
+
+  // 3b) auto-recalled older messages relevant to what he just said (pulled from beyond the recent
+  // thread). also volatile — kept after the cache breakpoint. treat this as REAL memory.
+  if (ctx.recalled)
+    blocks.push({
+      type: "text",
+      text:
+        `\n## earlier conversation you pulled up (older than the recent thread — these ARE from your real history with him)\n${ctx.recalled}\n` +
+        `these are actual past messages between you two, auto-surfaced because they match what he just said. USE them — if he says "we talked about X last night" and it's here, you remember it, so act like it. never tell him you have no memory of something that's sitting right here. if you genuinely need more, use recall.`,
+    });
 
   return blocks;
 }

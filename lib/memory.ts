@@ -312,26 +312,83 @@ export async function deleteUserSubagent(userId: string, name: string) {
   return { removed: data?.length ?? 0 };
 }
 
-// memory_query: search jonny's FULL history (not just the recent ~20-msg window) + his facts,
-// for when he references something older than what's already in context. substring match — simple,
-// but enough to surface "what did i say about X" / "that thing from last week".
+// stopwords + a tokenizer for keyword search. we keep only meaningful words so a reference like
+// "didn't i tell you last night about the mood log texts" searches on mood/log/texts, not on
+// every message that happens to contain "last"/"night"/"about".
+const STOPWORDS = new Set(
+  ("the a an and or but of to in on at for with about from as is are was were be been being am " +
+    "i you he she it we they me my mine your yours his her hers our ours their theirs this that these those " +
+    "what when where why how who which do did does done not no nor yeah yep nope ok okay just so if then " +
+    "than too very can could would should will wont cant dont didnt havent hasnt now today tonight yesterday " +
+    "tomorrow last night day time get got go going gonna wanna like know think say said tell told u ur")
+    .split(/\s+/)
+);
+
+// pull the useful keywords out of a chunk of text (deduped, capped, short/stopword-filtered).
+export function keywords(text: string, max = 12): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of String(text || "").toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || STOPWORDS.has(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// AUTO-RECALL: given what jonny just said, surface older messages from his FULL history that look
+// relevant — so the brain always sees the past conversation instead of only the last ~40 messages.
+// beforeIso excludes whatever's already loaded as recent context (no duplication). This is the
+// backbone of lexa's memory: she no longer has to *decide* to remember; relevant history is fed in.
+export async function retrieveRelevantMessages(
+  userId: string,
+  text: string,
+  opts: { beforeIso?: string; limit?: number } = {}
+): Promise<{ direction: string; body: string; created_at: string }[]> {
+  const kws = keywords(text);
+  if (!kws.length) return [];
+  let q = db.from("messages").select("direction,body,created_at").eq("user_id", userId);
+  if (opts.beforeIso) q = q.lt("created_at", opts.beforeIso);
+  // OR across keywords — tokens are alphanumeric only, so this is safe in PostgREST's .or() syntax
+  q = q.or(kws.map((k) => `body.ilike.%${k}%`).join(","));
+  // pull a wide candidate set, then rank by RELEVANCE (how many distinct keywords a message hits)
+  // before recency — so a dense earlier discussion beats a recent message that only grazed one word.
+  const { data } = await q.order("created_at", { ascending: false }).limit(60);
+  const limit = opts.limit ?? 8;
+  const scored = ((data ?? []) as any[]).map((m) => {
+    const b = String(m.body || "").toLowerCase();
+    return { m, score: kws.reduce((n, k) => n + (b.includes(k) ? 1 : 0), 0), t: new Date(m.created_at).getTime() };
+  });
+  scored.sort((a, z) => z.score - a.score || z.t - a.t); // relevance desc, then most-recent
+  return scored
+    .slice(0, limit)
+    .map((s) => s.m)
+    .sort((a, z) => new Date(a.created_at).getTime() - new Date(z.created_at).getTime()); // chrono for reading
+}
+
+// memory_query: search jonny's FULL history (not just the recent window) + his facts, for when he
+// references something older than what's already in context. keyword OR-match (was a single
+// substring) so multi-word references like "the mood log flow" actually hit.
 export async function searchMemory(userId: string, query: string, limit = 8) {
   const q = (query || "").trim();
   if (!q) return { messages: [], facts: [] };
-  const like = `%${q}%`;
+  const kws = keywords(query);
+  const msgOr = (kws.length ? kws : [q]).map((k) => `body.ilike.%${k}%`).join(",");
+  const factOr = (kws.length ? kws : [q]).flatMap((k) => [`key.ilike.%${k}%`, `value.ilike.%${k}%`]).join(",");
   const [msgs, fcts] = await Promise.all([
     db
       .from("messages")
       .select("direction,body,created_at")
       .eq("user_id", userId)
-      .ilike("body", like)
+      .or(msgOr)
       .order("created_at", { ascending: false })
       .limit(limit),
     db
       .from("facts")
       .select("category,key,value,updated_at")
       .eq("user_id", userId)
-      .or(`key.ilike.${like},value.ilike.${like}`)
+      .or(factOr)
       .limit(limit),
   ]);
   return { messages: (msgs.data ?? []).reverse(), facts: fcts.data ?? [] };
