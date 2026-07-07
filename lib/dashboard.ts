@@ -13,14 +13,14 @@ export async function loadDashboard() {
   if (!uid) return null;
   const [facts, goals, playbooks, reminders, integrations, user, commitments, subagents, places, messages, jobs] =
     await Promise.all([
-      db.from("facts").select("id,category,key,value").eq("user_id", uid).order("category"),
-      db.from("goals").select("id,title,detail,status").eq("user_id", uid).neq("status", "dropped"),
-      db.from("playbooks").select("id,name,trigger,instructions,active,format").eq("user_id", uid).order("name"),
-      db.from("reminders").select("id,title,due_at,status,recurrence").eq("user_id", uid).eq("status", "scheduled").order("due_at"),
+      db.from("facts").select("id,category,key,value,area").eq("user_id", uid).order("category"),
+      db.from("goals").select("id,title,detail,status,area").eq("user_id", uid).neq("status", "dropped"),
+      db.from("playbooks").select("id,name,trigger,instructions,active,format,area").eq("user_id", uid).order("name"),
+      db.from("reminders").select("id,title,due_at,status,recurrence,area").eq("user_id", uid).eq("status", "scheduled").order("due_at"),
       db.from("integrations").select("provider,status,meta").eq("user_id", uid),
       db.from("users").select("id,name,timezone,home_address,settings").eq("id", uid).single(),
       db.from("commitments").select("id,what,status").eq("user_id", uid).order("created_at", { ascending: false }).limit(25),
-      db.from("subagents").select("id,name,brief,tools").eq("user_id", uid).order("name"),
+      db.from("subagents").select("id,name,brief,tools,area").eq("user_id", uid).order("name"),
       db.from("places").select("id,name,address").eq("user_id", uid).order("name"),
       db.from("messages").select("direction,body").eq("user_id", uid).order("created_at", { ascending: false }).limit(12),
       db.from("jobs").select("status").order("created_at", { ascending: false }).limit(40),
@@ -43,6 +43,7 @@ export async function loadDashboard() {
     reminders: reminders.data || [],
     integrations: integrations.data || [],
     settings: (u.settings as any) || {},
+    areas: ((u.settings as any) || {}).areas || [],
     timezone: u.timezone || "America/New_York",
     home_address: u.home_address || "",
     commitments: commitments.data || [],

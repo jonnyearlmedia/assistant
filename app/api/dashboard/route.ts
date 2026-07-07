@@ -34,6 +34,9 @@ const CAPS: Record<string, string[]> = {
 
 const asArray = (v: any): string[] => (Array.isArray(v) ? v : v == null || v === "" ? [] : [v]);
 const now = () => new Date().toISOString();
+const slug = (s: string) => String(s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+// tables that carry a life-area tag (kind → table). used by set_area + area delete cleanup.
+const AREA_TABLES: Record<string, string> = { fact: "facts", goal: "goals", reminder: "reminders", playbook: "playbooks", subagent: "subagents" };
 
 export async function POST(req: NextRequest) {
   const uid = await ownerUserId();
@@ -66,7 +69,7 @@ export async function POST(req: NextRequest) {
         if (!value) return NextResponse.json({ error: "type what she should remember" }, { status: 400 });
         const key = String(body.key || value).trim().slice(0, 60); // auto key from the value if none given
         await db.from("facts").upsert(
-          { user_id: uid, category: (category || "general").trim().toLowerCase() || "general", key, value, source: "dashboard", updated_at: now() },
+          { user_id: uid, category: (category || "general").trim().toLowerCase() || "general", key, value, source: "dashboard", area: body.area ? slug(body.area) : null, updated_at: now() },
           { onConflict: "user_id,category,key" }
         );
         return NextResponse.json({ ok: true });
@@ -80,7 +83,7 @@ export async function POST(req: NextRequest) {
       // ---- goals ----
       case "add_goal": {
         if (!body.title) return NextResponse.json({ error: "title required" }, { status: 400 });
-        await db.from("goals").insert({ user_id: uid, title: body.title, detail: body.detail || null });
+        await db.from("goals").insert({ user_id: uid, title: body.title, detail: body.detail || null, area: body.area ? slug(body.area) : null });
         return NextResponse.json({ ok: true });
       }
 
@@ -88,7 +91,7 @@ export async function POST(req: NextRequest) {
       case "save_playbook": {
         if (!body.name || !body.instructions) return NextResponse.json({ error: "name+instructions required" }, { status: 400 });
         await db.from("playbooks").upsert(
-          { user_id: uid, name: body.name.trim(), trigger: body.trigger || null, instructions: body.instructions, active: true, updated_at: now() },
+          { user_id: uid, name: body.name.trim(), trigger: body.trigger || null, instructions: body.instructions, active: true, ...(body.area !== undefined ? { area: body.area ? slug(body.area) : null } : {}), updated_at: now() },
           { onConflict: "user_id,name" }
         );
         return NextResponse.json({ ok: true });
@@ -108,6 +111,7 @@ export async function POST(req: NextRequest) {
           location: body.location || null,
           recurrence: body.recurrence || null,
           lead_time_min: body.lead_time_min ? parseInt(body.lead_time_min) : 0,
+          area: body.area ? slug(body.area) : null,
         });
         return NextResponse.json({ ok: true });
       }
@@ -153,7 +157,7 @@ export async function POST(req: NextRequest) {
         tools = [...new Set(tools)];
         if (!tools.length) return NextResponse.json({ error: "pick at least one ability for your helper" }, { status: 400 });
         await db.from("subagents").upsert(
-          { user_id: uid, name, brief: body.brief || "", tools, active: true, updated_at: now() },
+          { user_id: uid, name, brief: body.brief || "", tools, active: true, ...(body.area !== undefined ? { area: body.area ? slug(body.area) : null } : {}), updated_at: now() },
           { onConflict: "user_id,name" }
         );
         return NextResponse.json({ ok: true });
@@ -173,7 +177,7 @@ export async function POST(req: NextRequest) {
 
       // ---- "just dump it": free text → auto-sorted into the right places ----
       case "organize":
-        return NextResponse.json(await organizeDump(uid, String(body.text || "")));
+        return NextResponse.json(await organizeDump(uid, String(body.text || ""), body.area ? slug(body.area) : null));
 
       // ---- custom instructions (jonny's own standing rules, folded into her brain) ----
       case "set_instructions": {
@@ -189,6 +193,45 @@ export async function POST(req: NextRequest) {
         const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
         const settings = { ...((user?.settings as any) || {}), custom_instructions: merged };
         await db.from("users").update({ settings }).eq("id", uid);
+        return NextResponse.json({ ok: true });
+      }
+
+      // ---- life areas (user-defined tabs) ----
+      case "add_area": {
+        const name = String(body.name || "").trim().slice(0, 32);
+        if (!name) return NextResponse.json({ error: "name your area" }, { status: 400 });
+        const id = slug(name);
+        if (!id) return NextResponse.json({ error: "give it letters/numbers" }, { status: 400 });
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const areas: any[] = [...(((user?.settings as any) || {}).areas || [])];
+        if (!areas.find((a) => a.id === id)) areas.push({ id, name, emoji: String(body.emoji || "").slice(0, 4) || "🗂️" });
+        await db.from("users").update({ settings: { ...((user?.settings as any) || {}), areas } }).eq("id", uid);
+        return NextResponse.json({ ok: true, id });
+      }
+      case "edit_area": {
+        const { id } = body;
+        if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const areas: any[] = (((user?.settings as any) || {}).areas || []).map((a: any) =>
+          a.id === id ? { ...a, name: (body.name ?? a.name).toString().slice(0, 32), emoji: (body.emoji ?? (a.emoji || "🗂️")).toString().slice(0, 4) } : a
+        );
+        await db.from("users").update({ settings: { ...((user?.settings as any) || {}), areas } }).eq("id", uid);
+        return NextResponse.json({ ok: true });
+      }
+      case "delete_area": {
+        const { id } = body;
+        if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+        const { data: user } = await db.from("users").select("settings").eq("id", uid).single();
+        const areas: any[] = (((user?.settings as any) || {}).areas || []).filter((a: any) => a.id !== id);
+        await db.from("users").update({ settings: { ...((user?.settings as any) || {}), areas } }).eq("id", uid);
+        // untag items in that area (they fall back to "All"), don't delete them
+        for (const table of Object.values(AREA_TABLES)) await db.from(table).update({ area: null }).eq("user_id", uid).eq("area", id);
+        return NextResponse.json({ ok: true });
+      }
+      case "set_area": {
+        const table = AREA_TABLES[body.kind];
+        if (!table || !body.id) return NextResponse.json({ error: "bad kind/id" }, { status: 400 });
+        await db.from(table).update({ area: body.area ? slug(body.area) : null }).eq("user_id", uid).eq("id", body.id);
         return NextResponse.json({ ok: true });
       }
 

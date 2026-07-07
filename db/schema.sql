@@ -26,6 +26,7 @@ create table if not exists facts (
   source      text default 'conversation',         -- how she learned it (auditable)
   confidence  real default 0.8,
   pinned      boolean default false,               -- pinned facts never auto-expire
+  area        text,                                -- optional life-area tag (therapy | workouts | ...) for dashboard filtering
   updated_at  timestamptz not null default now(),
   created_at  timestamptz not null default now(),
   unique (user_id, category, key)
@@ -39,6 +40,7 @@ create table if not exists goals (
   detail      text,
   status      text not null default 'active',      -- active | paused | done | dropped
   cadence     text,                                -- how often to check in
+  area        text,                                -- optional life-area tag for dashboard filtering
   created_at  timestamptz not null default now()
 );
 
@@ -52,6 +54,7 @@ create table if not exists playbooks (
   instructions text not null,                      -- what to do, in lexa's own words
   format       jsonb,                              -- strict schema for structured logs (notion db fields)
   target       jsonb,                              -- where it writes (e.g. notion page/db id)
+  area         text,                               -- optional life-area tag for dashboard filtering
   active       boolean default true,
   updated_at   timestamptz not null default now(),
   created_at   timestamptz not null default now(),
@@ -69,6 +72,7 @@ create table if not exists reminders (
   location       text,                             -- destination for drive-time math
   recurrence     text,                             -- rrule-ish, null = one-shot
   status         text not null default 'scheduled',-- scheduled | sent | done | cancelled
+  area           text,                             -- optional life-area tag for dashboard filtering
   ticktick_id    text,                             -- link back to source of truth if applicable
   created_at     timestamptz not null default now()
 );
@@ -111,6 +115,7 @@ create table if not exists subagents (
   name        text not null,                      -- delegate target, e.g. "invoice_parser"
   brief       text,                               -- one-line identity/instructions
   tools       jsonb not null default '[]',        -- array of tool names it may use
+  area        text,                               -- optional life-area tag for dashboard filtering
   active      boolean default true,
   updated_at  timestamptz not null default now(),
   created_at  timestamptz not null default now(),
