@@ -13,6 +13,28 @@ import * as mem from "./memory";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.LEXA_MODEL || "claude-sonnet-5";
 const MAX_TOOL_TURNS = 8;
+// how many raw message ROWS to load for context. each bubble she sends is its own row, so a chatty
+// reply is 4-6 rows — we load a lot and then coalesce them into real turns below (see coalesce()).
+const HISTORY_ROWS = 150;
+
+// her multi-bubble replies (and his rapid-fire texts) are stored as separate rows. merge consecutive
+// same-direction rows into ONE turn so: (a) the model sees clean alternating turns, not fragmented
+// half-thoughts, and (b) "150 rows" becomes ~30-40 real exchanges instead of ~6. bubbles rejoin with
+// blank lines (how they were split to send in the first place).
+function coalesceTurns(rows: { direction: string; body: string }[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+  for (const m of rows) {
+    const role: "user" | "assistant" = m.direction === "inbound" ? "user" : "assistant";
+    const body = m.body || "";
+    const last = out[out.length - 1];
+    if (last && last.role === role && typeof last.content === "string") {
+      last.content = last.content ? `${last.content}\n\n${body}` : body;
+    } else {
+      out.push({ role, content: body });
+    }
+  }
+  return out;
+}
 
 // request-time copy of messages with a cache breakpoint on the very last content block,
 // so each call in the tool loop reuses everything before it (system + tools + prior turns).
@@ -63,7 +85,7 @@ export async function think(
     mem.listGoals(user.id),
     mem.listPlaybooks(user.id),
     mem.listUserSubagents(user.id),
-    mem.recentMessages(user.id, 40, opts.historyBefore),
+    mem.recentMessages(user.id, HISTORY_ROWS, opts.historyBefore),
   ]);
 
   // AUTO-RECALL: surface older messages relevant to what he just said, from BEYOND the recent
@@ -100,10 +122,7 @@ export async function think(
     recalled,
   });
 
-  const messages: Anthropic.MessageParam[] = history.map((m) => ({
-    role: m.direction === "inbound" ? "user" : "assistant",
-    content: m.body || "",
-  }));
+  const messages: Anthropic.MessageParam[] = coalesceTurns(history);
 
   // current inbound — pull in attachments: images for vision, text/markdown files for ingestion
   let userContent: any = incomingText;
@@ -128,7 +147,14 @@ export async function think(
     if (blocks.length > 0) userContent = blocks;
     else if (!incomingText) userContent = "[sent an attachment i couldn't open — ask him what it was]";
   }
-  messages.push({ role: "user", content: userContent });
+  // fold the current text into a trailing user turn if history ended on one (his last text went
+  // unanswered), so we don't emit two user turns in a row. media stays its own turn.
+  const tail = messages[messages.length - 1];
+  if (tail && tail.role === "user" && typeof tail.content === "string" && typeof userContent === "string") {
+    tail.content = tail.content ? `${tail.content}\n\n${userContent}` : userContent;
+  } else {
+    messages.push({ role: "user", content: userContent });
+  }
 
   let reply = "";
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {

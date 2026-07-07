@@ -101,5 +101,5 @@ export async function POST(req: NextRequest) {
 
 // simple health check
 export async function GET() {
-  return NextResponse.json({ service: "lexa", status: "alive", rev: "auto-recall-memory-v25" });
+  return NextResponse.json({ service: "lexa", status: "alive", rev: "coalesce-antispam-v26" });
 }

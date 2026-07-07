@@ -21,9 +21,14 @@ export async function sendBubbles(
   let bubbles = text
     .split(/\n\s*\n+/)
     .map((b) => b.trim())
-    .filter(Boolean)
-    .slice(0, 6);
+    .filter(Boolean);
   if (bubbles.length === 0) bubbles = [text.trim() || "…"];
+  // hard anti-spam guarantee: never more than 4 bubbles. if she over-splits, merge the overflow into
+  // the last bubble instead of dropping it — no content lost, but he never gets a 5+ text barrage.
+  const MAX_BUBBLES = 4;
+  if (bubbles.length > MAX_BUBBLES) {
+    bubbles = [...bubbles.slice(0, MAX_BUBBLES - 1), bubbles.slice(MAX_BUBBLES - 1).join("\n\n")];
+  }
 
   let sent = 0;
   let failed = 0;
