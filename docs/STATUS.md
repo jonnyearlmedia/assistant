@@ -22,7 +22,9 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
 - **TickTick** — create (into a named list), read (today/week/all + overdue + undated backlog),
   complete, update (reschedule/rename/reprioritize/**move between lists**), delete, list projects
 - **Notion** — search all, read any page, query any db, create row in any db (schema-aware → health_mood),
-  append to any page, Master Planner create/list
+  append to any page, **archive/delete any page** (verified — cleans up duplicate rows), Master Planner create/list.
+  Mood logging DEDUPES on date+block (one entry per block — re-logging updates, never duplicates) and titles
+  entries with jonny's em-dash convention ("Mood — Late Night — Jul 6").
 - **Gmail** (both inboxes: jonnyearl + jonathanmurao) — search, **send**, **draft**
 - **Google Calendar** — list upcoming, create, update/reschedule/move, delete
 - **Google Drive** — search + read file contents (Docs export + text)
@@ -64,7 +66,9 @@ _Last updated at the "gaps-closed" milestone (all integrations given full read/w
   exposed and briefs render "from X until Y"; (3) 8 duplicate past-event tasks deleted from TickTick.
   Watch: GitHub cron is best-effort — if ticks prove flaky, move to Supabase pg_cron hitting the
   tick URL (needs the Vercel bypass secret from jonny once).
-- Due reminders + "leave now" (with drive time)
+- Due reminders + "leave now" (with drive time). Scheduling is timezone-safe: `due_at` is taken as
+  jonny's LOCAL wall-clock and normalized to a correct UTC instant (DST-aware) before storage, so
+  "5:15am" fires at 5:15am PT — not 10:15pm. Reminders can be cancelled/deleted by id (`cancel_reminder`).
 - Morning brief (TickTick + Notion + Calendar + unread email)
 - First-days learning + evening check-in
 - User-defined automations (`create_automation` → scheduled, runs full tool loop)

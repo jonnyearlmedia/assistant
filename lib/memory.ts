@@ -106,14 +106,53 @@ export async function listPlaybooks(userId: string) {
   return data ?? [];
 }
 
+// tz offset (ms, + = ahead of UTC) for a given instant in an IANA timezone. no date lib.
+function tzOffsetMs(instant: Date, tz: string): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const p: any = Object.fromEntries(dtf.formatToParts(instant).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +(p.hour === "24" ? 0 : p.hour), +p.minute, +p.second);
+  return asUtc - instant.getTime();
+}
+
+// Interpret a wall-clock ISO string (no offset) as local time in `tz` → a correct UTC instant.
+// Fixes the reminder timezone bug: the model emits naive local times ("2026-07-08T05:15"), which
+// Postgres was reading as UTC. We resolve the offset (DST-aware) and store a real UTC timestamp.
+export function normalizeDueAt(dueAt: string, tz?: string): string {
+  const s = String(dueAt || "").trim();
+  // already offset-qualified (ends in Z or ±HH:MM / ±HHMM) → it's an absolute instant, trust it.
+  if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) throw new Error(`bad due_at: ${dueAt}`);
+    return d.toISOString();
+  }
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) throw new Error(`bad due_at: ${dueAt}`);
+    return d.toISOString();
+  }
+  const [, y, mo, d, hh = "0", mi = "0", ss = "0"] = m;
+  const zone = tz || "America/New_York";
+  const guess = Date.UTC(+y, +mo - 1, +d, +hh, +mi, +ss); // wall clock read as if UTC
+  // subtract the offset to land on the true instant; re-check at that instant for DST edges.
+  const off1 = tzOffsetMs(new Date(guess), zone);
+  const off2 = tzOffsetMs(new Date(guess - off1), zone);
+  return new Date(guess - off2).toISOString();
+}
+
 export async function scheduleReminder(
   userId: string,
-  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string; area?: string | null }
+  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string; area?: string | null },
+  tz?: string
 ) {
-  const { area, ...rest } = r;
+  const { area, due_at, ...rest } = r;
   const { data, error } = await db
     .from("reminders")
-    .insert({ user_id: userId, ...rest, area: areaSlug(area) })
+    .insert({ user_id: userId, ...rest, due_at: normalizeDueAt(due_at, tz), area: areaSlug(area) })
     .select("id,title,due_at,lead_time_min,location")
     .single();
   if (error) throw new Error(`scheduleReminder: ${error.message}`);

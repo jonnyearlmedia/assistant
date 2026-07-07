@@ -104,6 +104,27 @@ export interface MoodEntry {
   tz?: string; // for the date-only + human name
 }
 
+// find an existing mood row for a given date + block (the natural key — "one block = one entry").
+// used to DEDUPE: re-logging the same block updates that row instead of piling on a duplicate.
+async function findMoodEntry(dateOnly: string, block: string): Promise<string | null> {
+  const res = await fetch(`${NOTION}/databases/${HEALTH_MOOD_DB}/query`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      page_size: 1,
+      filter: {
+        and: [
+          { property: "Date", date: { equals: dateOnly } },
+          { property: "Time Block", select: { equals: block } },
+        ],
+      },
+    }),
+  });
+  if (!res.ok) return null; // filter mismatch / transient error → fall through to a normal create
+  const d = await res.json();
+  return d?.results?.[0]?.id || null;
+}
+
 export async function logMood(m: MoodEntry): Promise<{ ok: boolean; id?: string; verified: boolean; detail: string }> {
   if (!process.env.NOTION_TOKEN) return { ok: false, verified: false, detail: "NOTION_TOKEN not set" };
   const tz = m.tz || "America/New_York";
@@ -116,7 +137,8 @@ export async function logMood(m: MoodEntry): Promise<{ ok: boolean; id?: string;
   );
   const dateOnly = `${g.year}-${g.month}-${g.day}`;
   const dateLabel = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric" }).format(when);
-  const name = `Mood - ${block} - ${dateLabel}`;
+  // em dash to match jonny's own entry-title convention ("Mood — Late Night — Jul 6"), not a hyphen.
+  const name = `Mood — ${block} — ${dateLabel}`;
 
   const props: any = {
     Name: { title: [{ text: { content: name } }] },
@@ -131,11 +153,11 @@ export async function logMood(m: MoodEntry): Promise<{ ok: boolean; id?: string;
   if (m.notes) props["Notes"] = { rich_text: [{ text: { content: String(m.notes).slice(0, 1900) } }] };
   if (typeof m.therapy_day === "boolean") props["is_therapy_day"] = { checkbox: m.therapy_day };
 
-  const res = await fetch(`${NOTION}/pages`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ parent: { database_id: HEALTH_MOOD_DB }, properties: props }),
-  });
+  // dedupe: if this date+block already has a row, UPDATE it rather than create a duplicate.
+  const existingId = await findMoodEntry(dateOnly, block);
+  const res = existingId
+    ? await fetch(`${NOTION}/pages/${existingId}`, { method: "PATCH", headers: headers(), body: JSON.stringify({ properties: props }) })
+    : await fetch(`${NOTION}/pages`, { method: "POST", headers: headers(), body: JSON.stringify({ parent: { database_id: HEALTH_MOOD_DB }, properties: props }) });
   const data = await res.json();
   if (!res.ok) {
     const detail = `mood log failed: ${data?.message || res.status}${res.status === 404 ? " — the health_mood db may not be shared with lexa's Notion integration (••• → Connections)" : ""}`;
@@ -147,10 +169,11 @@ export async function logMood(m: MoodEntry): Promise<{ ok: boolean; id?: string;
   const cd = await check.json();
   const gotBlock = cd?.properties?.["Time Block"]?.select?.name;
   const verified = check.ok && cd?.id === id && gotBlock === block;
+  const verb = existingId ? "updated" : "logged";
   const detail = verified
-    ? `logged & verified in health_mood: ${block}${typeof m.rating === "number" ? ` ${m.rating}/10` : ""}${m.category ? ` (${m.category})` : ""}`
+    ? `${verb} & verified in health_mood: ${block}${typeof m.rating === "number" ? ` ${m.rating}/10` : ""}${m.category ? ` (${m.category})` : ""}${existingId ? " (existing entry for this block — no duplicate)" : ""}`
     : "wrote the row but read-back couldn't confirm — flag it, don't claim done";
-  auditWrite("notion", "log_mood", { targetRef: id, requested: compactReq({ block, rating: m.rating, category: m.category }), verified, detail });
+  auditWrite("notion", "log_mood", { targetRef: id, requested: compactReq({ block, rating: m.rating, category: m.category, updated: !!existingId }), verified, detail });
   return { ok: true, id, verified, detail };
 }
 
@@ -294,6 +317,29 @@ export async function createPageInDb(
   const detail = `created & ${check.ok ? "verified" : "UNVERIFIED"} row in db${skipped.length ? ` (ignored unknown fields: ${skipped.join(", ")})` : ""}`;
   auditWrite("notion", "create_page", { targetRef: d.id, requested: compactReq(fields), verified: check.ok, detail });
   return { ok: true, id: d.id, verified: check.ok, detail };
+}
+
+// archive (soft-delete → Notion trash) any page by id. this is how duplicate rows get cleaned up —
+// e.g. a stray mood-log entry. VERIFIED: we read the page back and confirm archived === true.
+export async function archivePage(pageId: string): Promise<{ ok: boolean; verified: boolean; detail: string }> {
+  if (!process.env.NOTION_TOKEN) return { ok: false, verified: false, detail: "NOTION_TOKEN not set" };
+  const res = await fetch(`${NOTION}/pages/${pageId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ archived: true }),
+  });
+  const d = await res.json();
+  if (!res.ok) {
+    const detail = `archive failed: ${d?.message || res.status}`;
+    auditWrite("notion", "archive_page", { targetRef: pageId, verified: false, detail });
+    return { ok: false, verified: false, detail };
+  }
+  const check = await fetch(`${NOTION}/pages/${pageId}`, { headers: headers() });
+  const cd = await check.json();
+  const verified = check.ok && cd?.archived === true;
+  const detail = verified ? "archived & verified (moved to Notion trash)" : "sent archive but read-back couldn't confirm — flag it, don't claim done";
+  auditWrite("notion", "archive_page", { targetRef: pageId, verified, detail });
+  return { ok: true, verified, detail };
 }
 
 // append text content to any notion page
