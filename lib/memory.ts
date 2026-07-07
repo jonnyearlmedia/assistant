@@ -3,17 +3,22 @@
 
 import { db } from "./db";
 
+// life-area tags are stored as slugs (matches the dashboard). accept a name or slug, store a slug.
+export const areaSlug = (s?: string | null): string | null =>
+  s ? String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || null : null;
+
 export async function rememberFact(
   userId: string,
   category: string,
   key: string,
   value: string,
-  source = "conversation"
+  source = "conversation",
+  area?: string | null
 ) {
   const { data, error } = await db
     .from("facts")
     .upsert(
-      { user_id: userId, category, key, value, source, updated_at: new Date().toISOString() },
+      { user_id: userId, category, key, value, source, ...(area !== undefined ? { area: areaSlug(area) } : {}), updated_at: new Date().toISOString() },
       { onConflict: "user_id,category,key" }
     )
     .select("id,category,key,value")
@@ -43,10 +48,10 @@ export async function listFacts(userId: string) {
   return data ?? [];
 }
 
-export async function setGoal(userId: string, title: string, detail?: string, cadence?: string) {
+export async function setGoal(userId: string, title: string, detail?: string, cadence?: string, area?: string | null) {
   const { data, error } = await db
     .from("goals")
-    .insert({ user_id: userId, title, detail, cadence })
+    .insert({ user_id: userId, title, detail, cadence, area: areaSlug(area) })
     .select("id,title,status")
     .single();
   if (error) throw new Error(`setGoal: ${error.message}`);
@@ -68,7 +73,7 @@ export async function savePlaybook(
   userId: string,
   name: string,
   instructions: string,
-  opts: { trigger?: string; format?: any; target?: any } = {}
+  opts: { trigger?: string; format?: any; target?: any; area?: string | null } = {}
 ) {
   const { data, error } = await db
     .from("playbooks")
@@ -80,6 +85,7 @@ export async function savePlaybook(
         trigger: opts.trigger,
         format: opts.format,
         target: opts.target,
+        ...(opts.area !== undefined ? { area: areaSlug(opts.area) } : {}),
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id,name" }
@@ -102,11 +108,12 @@ export async function listPlaybooks(userId: string) {
 
 export async function scheduleReminder(
   userId: string,
-  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string }
+  r: { title: string; body?: string; due_at: string; lead_time_min?: number; location?: string; recurrence?: string; area?: string | null }
 ) {
+  const { area, ...rest } = r;
   const { data, error } = await db
     .from("reminders")
-    .insert({ user_id: userId, ...r })
+    .insert({ user_id: userId, ...rest, area: areaSlug(area) })
     .select("id,title,due_at,lead_time_min,location")
     .single();
   if (error) throw new Error(`scheduleReminder: ${error.message}`);

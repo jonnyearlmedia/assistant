@@ -45,11 +45,15 @@ real phone number and she replies, remembers, acts on his tools, and reaches out
 ```
 app/
   api/linq/webhook/route.ts   inbound texts: verify → debounce (waitUntil) → triage → think → bubble replies
-  api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin|jobs to fire on demand
+  api/cron/tick/route.ts      proactive heartbeat (runTick); ?force=brief|checkin|planning|mood|jobs to fire on demand
   api/connect/{ticktick,google,google2}[/callback]/route.ts   OAuth connect flows
-  api/dashboard/route.ts      control-panel mutations (owner-only via Vercel Auth) — CRUD for every editable entity
-  dashboard/page.tsx          control panel: settings, subagent builder, memories(by category), goals, rules/
-                              workflows, reminders, commitments, places, live to-dos(ticktick), spend, reliability
+  api/dashboard/route.ts      control-panel mutations (owner-only via Vercel Auth) — CRUD for every editable entity;
+                              actions incl. organize(front-door sorter), set_instruction_list(rules), edit_reminder,
+                              set_mood, add/edit/delete_area + set_area (life-area tags)
+  dashboard/page.tsx          thin server wrapper → DashboardClient.tsx (interactive "use client" app)
+  dashboard/DashboardClient.tsx  the real UI: life-area TABS (filter whole dashboard by area, file straight in),
+                              "tell me anything" front door, editable rules list, mood check-ins card (heatmap),
+                              editable reminders, memories(by category), goals, how-tos, helper builder, settings
   page.tsx, layout.tsx        landing shell
 lib/
   persona.ts      system prompt (identity + 3 pillars + texting style + routing + proactive learning)
@@ -61,6 +65,9 @@ lib/
                   own custom specialists from the subagents table); `delegate` tool routes by name;
                   create_subagent/list_subagents/delete_subagent let him build specialists by text
   tools.ts        ALL tool definitions + dispatch() switch  ← add new capabilities here
+                  (incl. log_mood → health_mood verified write; write tools take an optional `area` tag)
+  organize.ts     organizeDump() — the dashboard "just write it" sorter: one model call classifies a brain-dump
+                  into fact/goal/reminder/playbook/instruction/place/commitment + files each (area-stampable)
   memory.ts       Supabase memory ops (facts, goals, playbooks, reminders, commitments, places, message log, debounce)
   db.ts           lazy Supabase client + resolveUser + User type
   linq.ts         Linq transport: sendMessage, startTyping, markRead, verifyLinq, parseInbound, fetchMedia/TextAttachment
@@ -69,7 +76,7 @@ lib/
   queue.ts        durable job queue on the jobs table: atomic claim, retry w/ exponential backoff,
                   dead-letter, dedupe_key exactly-once, tick lease, stuck-job reaper, prune
   audit.ts        auditWrite() → write_audits ledger (fire-and-forget receipt for every external write)
-  proactive.ts    dispatchDueReminders, dispatchDueCommitments, runDailyBrief, proactiveCheckin, runWeeklyPlanning, runAutomations, JOB_HANDLERS, runTick
+  proactive.ts    dispatchDueReminders, dispatchDueCommitments, runDailyBrief, proactiveCheckin, runWeeklyPlanning, runAutomations, runMoodCheckins (per-4h-block mood pings at a random in-window time → she infers/logs to health_mood), JOB_HANDLERS, runTick
                   (once-a-day work goes through the queue with per-user-per-day dedupe keys)
   integrations/
     tokens.ts     owner resolution + OAuth token storage (integrations table)

@@ -23,6 +23,7 @@ export const TOOLS: Anthropic.Tool[] = [
         category: { type: "string", description: "routine | preference | person | health | work | general" },
         key: { type: "string", description: "short stable key, e.g. 'wake_time'" },
         value: { type: "string" },
+        area: { type: "string", description: "optional: one of jonny's life areas (see 'his life areas' in context) if this clearly belongs to one, so it shows under that tab. omit if unsure." },
       },
       required: ["category", "key", "value"],
     },
@@ -42,7 +43,7 @@ export const TOOLS: Anthropic.Tool[] = [
     description: "Record a goal to hold jonny accountable to.",
     input_schema: {
       type: "object",
-      properties: { title: { type: "string" }, detail: { type: "string" }, cadence: { type: "string" } },
+      properties: { title: { type: "string" }, detail: { type: "string" }, cadence: { type: "string" }, area: { type: "string", description: "optional: one of jonny's life areas if it fits" } },
       required: ["title"],
     },
   },
@@ -58,6 +59,7 @@ export const TOOLS: Anthropic.Tool[] = [
         trigger: { type: "string", description: "when to run it" },
         format: { type: "object", description: "strict field schema for structured logs" },
         target: { type: "object", description: "where it writes, e.g. {notion_db_id: '...'}" },
+        area: { type: "string", description: "optional: one of jonny's life areas if it fits" },
       },
       required: ["name", "instructions"],
     },
@@ -75,6 +77,7 @@ export const TOOLS: Anthropic.Tool[] = [
         lead_time_min: { type: "number" },
         location: { type: "string" },
         recurrence: { type: "string" },
+        area: { type: "string", description: "optional: one of jonny's life areas if it fits" },
       },
       required: ["title", "due_at"],
     },
@@ -402,19 +405,20 @@ export async function dispatch(name: string, input: any, ctx: { userId: string }
   try {
     switch (name) {
       case "remember_fact":
-        return JSON.stringify(await mem.rememberFact(u, input.category, input.key, input.value));
+        return JSON.stringify(await mem.rememberFact(u, input.category, input.key, input.value, undefined, input.area));
       case "forget_fact":
         return JSON.stringify(await mem.forgetFact(u, input.key));
       case "list_facts":
         return JSON.stringify(await mem.listFacts(u));
       case "set_goal":
-        return JSON.stringify(await mem.setGoal(u, input.title, input.detail, input.cadence));
+        return JSON.stringify(await mem.setGoal(u, input.title, input.detail, input.cadence, input.area));
       case "save_playbook":
         return JSON.stringify(
           await mem.savePlaybook(u, input.name, input.instructions, {
             trigger: input.trigger,
             format: input.format,
             target: input.target,
+            area: input.area,
           })
         );
       case "schedule_reminder":
