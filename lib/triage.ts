@@ -63,20 +63,24 @@ function logTriageUsage(u: Anthropic.Usage) {
   Promise.resolve(db.from("usage_log").insert(row)).catch(() => {});
 }
 
-// last few rows of the thread, oldest→newest, so the triage can tell a mid-task follow-up from
-// standalone chatter. cheap (a few hundred Haiku tokens) and best-effort — a load failure just
-// means we classify without context (still fail-safe: unsure → FULL).
-async function recentThread(userId: string, beforeIso?: string): Promise<string> {
+// last few rows of the thread before the current batch, oldest→newest. used two ways: (1) a
+// DETERMINISTIC guard — if the row right before this batch is one of jonny's, his previous text
+// went unanswered, so this one is a follow-up on an open thread and must skip triage entirely; and
+// (2) context for the Haiku call. best-effort — a load failure means [] (still fail-safe → FULL).
+async function recentRows(userId: string, beforeIso?: string): Promise<{ direction: string; body: string }[]> {
   try {
-    const rows = await mem.recentMessages(userId, 12, beforeIso);
-    return rows
-      .map((m) => ({ who: m.direction === "inbound" ? "jonny" : "you", body: (m.body || "").replace(/\s+/g, " ").trim() }))
-      .filter((m) => m.body)
-      .map((m) => `${m.who}: ${m.body.slice(0, 200)}`)
-      .join("\n");
+    return await mem.recentMessages(userId, 12, beforeIso);
   } catch {
-    return "";
+    return [];
   }
+}
+
+function threadText(rows: { direction: string; body: string }[]): string {
+  return rows
+    .map((m) => ({ who: m.direction === "inbound" ? "jonny" : "you", body: (m.body || "").replace(/\s+/g, " ").trim() }))
+    .filter((m) => m.body)
+    .map((m) => `${m.who}: ${m.body.slice(0, 200)}`)
+    .join("\n");
 }
 
 export async function quickTriage(
@@ -89,8 +93,19 @@ export async function quickTriage(
   // opt-out hatch: jonny can disable triage from settings and force everything through the full brain
   if ((user.settings as any)?.triage_disabled) return { route: "full" };
 
+  const rows = await recentRows(user.id, opts.historyBefore);
+
+  // DETERMINISTIC follow-up guard — the fix for the "she keeps saying 'what's up' to a real
+  // request" loop. if the last message before this batch is jonny's (an inbound with body), his
+  // prior text hasn't been answered yet, so this new one is him continuing/chasing an open thread.
+  // route FULL with NO model call: it's both correct (she picks the thread back up) and cheaper
+  // (no wasted Haiku turn). the quick path stays available only when the thread was already closed
+  // out by one of her replies.
+  const lastRow = [...rows].reverse().find((m) => (m.body || "").trim());
+  if (lastRow && lastRow.direction === "inbound") return { route: "full" };
+
   try {
-    const thread = await recentThread(user.id, opts.historyBefore);
+    const thread = threadText(rows);
     // give Haiku the thread as context, then the new message to classify. one user turn keeps it
     // simple (no role-alternation reconstruction) and triage doesn't cache, so shape doesn't matter.
     const content = thread
