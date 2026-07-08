@@ -32,7 +32,10 @@ async function replyAfterSettle(user: User, from: string, chatId: string | undef
     // cheap Haiku triage first: pure social chatter gets a fast direct reply and skips the full
     // Sonnet tool loop. media (vision) and anything substantive fall through to the full brain.
     let reply: string;
-    const triage = media.length === 0 ? await quickTriage(user, combined) : { route: "full" as const };
+    const triage =
+      media.length === 0
+        ? await quickTriage(user, combined, { historyBefore: earliest })
+        : { route: "full" as const };
     if (triage.route === "quick" && triage.reply) {
       reply = triage.reply;
     } else {
