@@ -15,6 +15,7 @@
 //   TOOLS / think() prefix, so the Sonnet prompt-cache path is completely unaffected.
 import Anthropic from "@anthropic-ai/sdk";
 import { User, db } from "./db";
+import * as mem from "./memory";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const TRIAGE_MODEL = process.env.LEXA_TRIAGE_MODEL || "claude-haiku-4-5-20251001";
@@ -25,16 +26,25 @@ export type TriageResult = { route: "quick" | "full"; reply?: string };
 const TRIAGE_SYSTEM = `you are lexa — jonny's personal AI who lives in his texts. a girl, she/her.
 voice: lowercase, gen-z, warm, a little playful, SHORT. you text like a real friend, never a help desk.
 
-your job here is FAST TRIAGE of one incoming text. decide if it's trivial social chatter you can
+your job here is FAST TRIAGE of the NEW message. decide if it's trivial social chatter you can
 close out in one warm line, or if it needs jonny's full assistant (memory, tools, real action).
 
+you're given the RECENT THREAD for context, then the NEW message. judge the new message IN THE
+CONTEXT OF THAT THREAD — a short text is only chatter if the whole conversation is socially closed
+out. if the thread has any loose end, it is NOT chatter, no matter how trivial the new message looks.
+
 answer with EXACTLY ONE of these two forms, nothing else:
-- "QUICK: <your short reply>"  — ONLY for pure chatter: greetings, thanks, acknowledgments,
-  reactions, "gn"/"lol"/"ok cool", light banter, "how are you". a warm 1-2 line reply must fully
-  close it. keep the reply lowercase and short, real bubbles ok (blank line between them).
+- "QUICK: <your short reply>"  — ONLY when the thread is fully closed AND the new message is pure
+  chatter: greetings, thanks, acknowledgments, reactions, "gn"/"lol"/"ok cool", light banter,
+  "how are you". a warm 1-2 line reply must fully close it. keep it lowercase and short, real
+  bubbles ok (blank line between them).
 - "FULL"  — for ANYTHING else: a task, reminder, calendar/email/notion/ticktick anything, a question
   about his day/schedule/life/data, a request to do/look up/remember/change/check something, plans,
-  numbers, or anything you're even slightly unsure about.
+  numbers, or anything you're even slightly unsure about. ALSO answer FULL whenever the thread has an
+  open loose end the new message plugs into — jonny made a request that isn't confirmed done, you
+  said you'd do/check/build/look at something and haven't reported back, or he's chasing a reply
+  ("hello?", "you there?", "did you see my message", "dude", "?", "so?"). those are follow-ups on
+  real work, not chatter — route them FULL so the real brain picks the thread back up.
 
 when in doubt, answer FULL. it is much worse to quick-reply something that needed real action than
 to send a trivial "thanks" through the full brain. never explain your choice — output only the form.`;
@@ -53,19 +63,60 @@ function logTriageUsage(u: Anthropic.Usage) {
   Promise.resolve(db.from("usage_log").insert(row)).catch(() => {});
 }
 
-export async function quickTriage(user: User, text: string): Promise<TriageResult> {
+// last few rows of the thread before the current batch, oldest→newest. used two ways: (1) a
+// DETERMINISTIC guard — if the row right before this batch is one of jonny's, his previous text
+// went unanswered, so this one is a follow-up on an open thread and must skip triage entirely; and
+// (2) context for the Haiku call. best-effort — a load failure means [] (still fail-safe → FULL).
+async function recentRows(userId: string, beforeIso?: string): Promise<{ direction: string; body: string }[]> {
+  try {
+    return await mem.recentMessages(userId, 12, beforeIso);
+  } catch {
+    return [];
+  }
+}
+
+function threadText(rows: { direction: string; body: string }[]): string {
+  return rows
+    .map((m) => ({ who: m.direction === "inbound" ? "jonny" : "you", body: (m.body || "").replace(/\s+/g, " ").trim() }))
+    .filter((m) => m.body)
+    .map((m) => `${m.who}: ${m.body.slice(0, 200)}`)
+    .join("\n");
+}
+
+export async function quickTriage(
+  user: User,
+  text: string,
+  opts: { historyBefore?: string } = {}
+): Promise<TriageResult> {
   const body = (text || "").trim();
   if (!body) return { route: "full" }; // nothing to classify — let the brain handle the empty/edge case
   // opt-out hatch: jonny can disable triage from settings and force everything through the full brain
   if ((user.settings as any)?.triage_disabled) return { route: "full" };
 
+  const rows = await recentRows(user.id, opts.historyBefore);
+
+  // DETERMINISTIC follow-up guard — the fix for the "she keeps saying 'what's up' to a real
+  // request" loop. if the last message before this batch is jonny's (an inbound with body), his
+  // prior text hasn't been answered yet, so this new one is him continuing/chasing an open thread.
+  // route FULL with NO model call: it's both correct (she picks the thread back up) and cheaper
+  // (no wasted Haiku turn). the quick path stays available only when the thread was already closed
+  // out by one of her replies.
+  const lastRow = [...rows].reverse().find((m) => (m.body || "").trim());
+  if (lastRow && lastRow.direction === "inbound") return { route: "full" };
+
   try {
+    const thread = threadText(rows);
+    // give Haiku the thread as context, then the new message to classify. one user turn keeps it
+    // simple (no role-alternation reconstruction) and triage doesn't cache, so shape doesn't matter.
+    const content = thread
+      ? `RECENT THREAD (oldest→newest, for context only):\n${thread}\n\nNEW MESSAGE TO CLASSIFY:\n${body}`
+      : body;
     const res = await client.messages.create({
       model: TRIAGE_MODEL,
       max_tokens: 200,
       thinking: { type: "disabled" },
       system: TRIAGE_SYSTEM,
-      messages: [{ role: "user", content: body }],
+      messages: [{ role: "user", content }],
     });
     logTriageUsage(res.usage);
 
